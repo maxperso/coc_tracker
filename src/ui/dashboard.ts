@@ -99,6 +99,27 @@ const readOnly = (p: DashboardProps) => p.owner.toLowerCase() !== p.me.toLowerCa
 
 const RESOURCE_FR: Record<string, string> = { "Dark Elixir": "élixir noir", Elixir: "élixir", Gold: "or" };
 const res = (r?: string) => (r ? (RESOURCE_FR[r] ?? r) : "");
+const RESOURCE_ICON: Record<string, string> = { Gold: "gold", Elixir: "elixir", "Dark Elixir": "dark_elixir" };
+
+/** Coût d'un lancement, prix du Jam : icône de la ressource et montant arrondi (exact au survol). */
+function costTag(r: ChainResult, seg: { cost: number }): HTMLElement | null {
+  if (!(seg.cost > 0)) return null;
+  const resource = r.chain.entry.resource;
+  const file = resource ? RESOURCE_ICON[resource] : undefined;
+  return h(
+    "span",
+    { class: "cost", title: `${nf(Math.round(seg.cost))} ${res(resource)}, prix réduit du Jam` },
+    file ? h("img", { class: "cost-icon", src: `sprites/resources/${file}.webp`, alt: res(resource) }) : null,
+    file ? price(seg.cost) : `${price(seg.cost)} ${res(resource)}`,
+  );
+}
+
+/** « 12,75 M », « 2,1 M », « 210 k » : assez précis pour préparer ses ressources. */
+function price(n: number): string {
+  if (n < 1e6) return compact(n);
+  const m = n / 1e6;
+  return `${m.toLocaleString("fr-FR", { maximumFractionDigits: m >= 100 ? 0 : 2 })} M`;
+}
 const plural = (n: number, word: string) => `${word}${Math.abs(n) > 1 ? (word.endsWith("au") ? "x" : "s") : ""}`;
 const pctText = (x: number) => `${Math.floor(x * 100)} %`;
 
@@ -234,6 +255,8 @@ interface Todo {
   urgent?: boolean;
   /** Identifiant de l'action, pour la cocher « fait ». */
   key?: string;
+  /** Prix du lancement (icône de ressource et montant). */
+  cost?: HTMLElement | null;
 }
 
 /**
@@ -274,6 +297,7 @@ function todos(f: Forecast, v: Village): Todo[] {
           sub: "Ouvrier libre",
           urgent: true,
           key: `L:${r.chain.key}:${s.toLevel}`,
+          cost: costTag(r, s),
         });
       }
     } else {
@@ -290,6 +314,7 @@ function todos(f: Forecast, v: Village): Todo[] {
         sub: `${label} vide`,
         urgent: true,
         key: `L:${first.r.chain.key}:${first.s.toLevel}`,
+        cost: costTag(first.r, first.s),
       });
     }
   };
@@ -463,7 +488,7 @@ function summaryTab(p: DashboardProps, f: Forecast): HTMLElement {
               "li",
               { class: `${t.urgent ? "todo-item urgent" : "todo-item"}${t.key && p.checks.has(t.key) ? " is-done" : ""}` },
               t.icon ?? h("span", { class: "todo-dot", "aria-hidden": "true" }),
-              h("div", null, h("p", { class: "todo-text" }, t.text), t.sub ? h("p", { class: "hint" }, t.sub) : null),
+              h("div", null, h("p", { class: "todo-text" }, t.text, t.cost ?? null), t.sub ? h("p", { class: "hint" }, t.sub) : null),
               t.key ? doneBox(p, t.key, t.text, () => li) : null,
             );
             return li;
@@ -761,7 +786,7 @@ function eventRow(p: DashboardProps, e: PlanEvent, exportUnix: number, T: number
     h(
       "div",
       { class: "ev-main" },
-      h("p", { class: "ev-text" }, `Lance ${nameOf(r)} ${e.seg.toLevel - 1} → ${e.seg.toLevel}`),
+      h("p", { class: "ev-text" }, `Lance ${nameOf(r)} ${e.seg.toLevel - 1} → ${e.seg.toLevel}`, costTag(r, e.seg)),
       h("p", { class: "hint" }, `${POOL_LABEL[e.pool]} · fini le ${fmtDateTime(toDate(exportUnix, e.seg.end))}${e.seg.end > T ? " (après le Jam)" : ""}`),
     ),
     doneBox(p, key, `${nameOf(r)} ${e.seg.toLevel - 1} → ${e.seg.toLevel}`, () => li, onToggle),

@@ -1138,6 +1138,33 @@ summary:focus-visible,
   overflow-wrap: anywhere;
 }
 
+/* Prix d'un lancement : en bloc, il n'est pas barré quand la ligne est cochée. */
+.cost {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 8px;
+  padding: 1px 8px 1px 4px;
+  border-radius: 999px;
+  background: var(--soft);
+  color: var(--text);
+  font-size: 0.8125rem;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  vertical-align: 1px;
+  white-space: nowrap;
+}
+
+.cost-icon {
+  width: 18px;
+  height: 18px;
+  object-fit: contain;
+}
+
+.is-done .cost {
+  opacity: 0.5;
+}
+
 .ev-potion .ev-text {
   color: var(--done-strong);
 }

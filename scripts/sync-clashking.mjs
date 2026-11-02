@@ -113,7 +113,10 @@ for (const [cat, list] of Object.entries(categories)) {
     }
   }
 }
-for (const p of ["magic_items/builder_potion.webp", "magic_items/research_potion.webp", "magic_items/pet_potion.webp"]) {
+for (const p of [
+  "magic_items/builder_potion.webp", "magic_items/research_potion.webp", "magic_items/pet_potion.webp",
+  "resources/gold.webp", "resources/elixir.webp", "resources/dark_elixir.webp",
+]) {
   const dst = join(outSprites, p);
   mkdirSync(dirname(dst), { recursive: true });
   copyFileSync(join(assets, p), dst);
