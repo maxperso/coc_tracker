@@ -7,3 +7,6 @@ exports/
 *.export.json
 village-export*.json
 my_village.json
+dist-server/
+# Secrets de déploiement
+.env

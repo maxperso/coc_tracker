@@ -1,5 +1,6 @@
 import { GROUP_LABEL, groupOf, isPermanentBuilding, priorityRank, type BuildingGroup } from "../lib/buildings";
 import { displayName, findByName, gameIndex, maxLevel, type Entry } from "../lib/gamedata";
+import type { PlayerRow } from "../lib/api";
 import type { Snapshot } from "../lib/history";
 import { FOCUS_LABEL, forecast, heroLabel, wallSummary, type Forecast, type PoolForecast, type Settings } from "../lib/plan";
 import { globalPct, pct, progress, progressCurve } from "../lib/progress";
@@ -15,9 +16,10 @@ import { ganttCard } from "./gantt";
 import { legalFooter } from "./legal";
 import { about, comparison, details, exportCheck, historyView, potionPlanView } from "./more";
 import { sleepLabel } from "./sleep";
+import { playersView } from "./players";
 import { sprite } from "./sprite";
 
-export type Tab = "summary" | "plan" | "heroes" | "buildings" | "lab" | "progress" | "more";
+export type Tab = "summary" | "plan" | "heroes" | "buildings" | "lab" | "progress" | "players" | "more";
 
 const TAB_LABEL: Record<Tab, string> = {
   summary: "Résumé",
@@ -26,13 +28,16 @@ const TAB_LABEL: Record<Tab, string> = {
   buildings: "Bâtiments",
   lab: "Labo",
   progress: "Progression",
+  players: "Potes",
   more: "Plus",
 };
 
-export function tabsFor(s: Settings): Tab[] {
-  return s.focus === "buildings"
-    ? ["summary", "plan", "buildings", "heroes", "lab", "progress", "more"]
-    : ["summary", "plan", "heroes", "buildings", "lab", "progress", "more"];
+/** Onglets : un profil de pote est en lecture seule, sans « Potes » ni « Plus ». */
+export function tabsFor(s: Settings, readOnly = false): Tab[] {
+  const tabs: Tab[] = s.focus === "buildings"
+    ? ["summary", "plan", "buildings", "heroes", "lab", "progress", "players", "more"]
+    : ["summary", "plan", "heroes", "buildings", "lab", "progress", "players", "more"];
+  return readOnly ? tabs.filter((t) => t !== "players" && t !== "more") : tabs;
 }
 
 export interface DashboardProps {
@@ -41,15 +46,22 @@ export interface DashboardProps {
   /** Achats recommandés (null si l'utilisateur les saisit à la main). */
   purchase: Purchase | null;
   history: Snapshot[];
-  storageOk: boolean;
+  /** Joueur connecté. */
+  me: string;
+  /** Propriétaire du village affiché ; différent de `me` pour le profil d'un pote (lecture seule). */
+  owner: string;
+  players: { rows: PlayerRow[] | null; error?: string };
   tab: Tab;
   onTab: (t: Tab) => void;
   onStrategy: () => void;
   onSettings: () => void;
   onNewExport: () => void;
-  onExportHistory: () => void;
-  onImportHistory: (file: File) => void;
+  onOpenPlayer: (username: string) => void;
+  onBack: () => void;
+  onLogout: () => void;
 }
+
+const readOnly = (p: DashboardProps) => p.owner.toLowerCase() !== p.me.toLowerCase();
 
 const RESOURCE_FR: Record<string, string> = { "Dark Elixir": "élixir noir", Elixir: "élixir", Gold: "or" };
 const res = (r?: string) => (r ? (RESOURCE_FR[r] ?? r) : "");
@@ -71,15 +83,27 @@ function appHeader(p: DashboardProps): HTMLElement {
         "div",
         { class: "brand" },
         potion ? sprite("buildings", potion, potion.levels?.at(-1)?.l, "sm") : null,
-        h("div", null, h("p", { class: "brand-name" }, "Hammer Jam"), h("p", { class: "brand-meta" }, `${v.tag} · HDV ${v.th}`)),
+        h(
+          "div",
+          null,
+          h("p", { class: "brand-name" }, readOnly(p) ? `Village de ${p.owner}` : "Hammer Jam"),
+          h("p", { class: "brand-meta" }, `${v.tag} · HDV ${v.th}`),
+        ),
       ),
-      h(
-        "div",
-        { class: "appbar-actions" },
-        h("button", { type: "button", class: "btn btn-chip", onClick: p.onStrategy, "aria-label": `Stratégie : ${FOCUS_LABEL[p.settings.focus]}. Changer` }, h("span", { class: "chip-dot" }), FOCUS_LABEL[p.settings.focus]),
-        h("button", { type: "button", class: "btn btn-ghost", onClick: p.onSettings }, "Réglages"),
-        h("button", { type: "button", class: "btn btn-ghost hide-sm", onClick: p.onNewExport }, "Nouvel export"),
-      ),
+      readOnly(p)
+        ? h(
+            "div",
+            { class: "appbar-actions" },
+            h("span", { class: "btn btn-chip chip-static" }, h("span", { class: "chip-dot" }), FOCUS_LABEL[p.settings.focus]),
+            h("button", { type: "button", class: "btn btn-ghost", onClick: p.onBack }, "← Potes"),
+          )
+        : h(
+            "div",
+            { class: "appbar-actions" },
+            h("button", { type: "button", class: "btn btn-chip", onClick: p.onStrategy, "aria-label": `Stratégie : ${FOCUS_LABEL[p.settings.focus]}. Changer` }, h("span", { class: "chip-dot" }), FOCUS_LABEL[p.settings.focus]),
+            h("button", { type: "button", class: "btn btn-ghost", onClick: p.onSettings }, "Réglages"),
+            h("button", { type: "button", class: "btn btn-ghost hide-sm", onClick: p.onNewExport }, "Nouvel export"),
+          ),
     ),
     h(
       "nav",
@@ -87,7 +111,7 @@ function appHeader(p: DashboardProps): HTMLElement {
       h(
         "div",
         { class: "tabs-inner", role: "tablist" },
-        tabsFor(p.settings).map((t) =>
+        tabsFor(p.settings, readOnly(p)).map((t) =>
           h("button", { type: "button", role: "tab", class: "tab", "aria-selected": String(t === p.tab), onClick: () => p.onTab(t) }, TAB_LABEL[t]),
         ),
       ),
@@ -194,7 +218,7 @@ function summaryTab(p: DashboardProps, f: Forecast): HTMLElement {
     "section",
     { class: "stack" },
     sectionHead(
-      "Ton plan pour le Jam",
+      readOnly(p) ? `Plan de ${p.owner}` : "Ton plan pour le Jam",
       `Fin le ${fmtDayLong(new Date(JAM.end))} à ${fmtHour(new Date(JAM.end))}, dans ${fmtDays(T)} jours.`,
       estimate(),
     ),
@@ -202,7 +226,7 @@ function summaryTab(p: DashboardProps, f: Forecast): HTMLElement {
       "div",
       { class: "strategy" },
       h("span", null, h("strong", null, `Priorité ${FOCUS_LABEL[s.focus].toLowerCase()}`), ` · ${passText} · ${s.builders + (s.goblinBuilder ? 1 : 0)} ouvriers · ${nf(s.medals)} médailles · ${sleepLabel(s.sleep)}`),
-      h("button", { type: "button", class: "link", onClick: p.onStrategy }, "Changer"),
+      readOnly(p) ? null : h("button", { type: "button", class: "link", onClick: p.onStrategy }, "Changer"),
     ),
     h("div", { class: `tiles tiles-${tiles.length}` }, tiles),
     h(
@@ -415,7 +439,7 @@ function planTab(p: DashboardProps, f: Forecast): HTMLElement {
   return h(
     "section",
     { class: "stack" },
-    sectionHead("Ton plan jour par jour", "Heure de Paris. Reviens à ces heures pour relancer.", estimate()),
+    sectionHead(readOnly(p) ? `Plan de ${p.owner}, jour par jour` : "Ton plan jour par jour", "Heure de Paris. Reviens à ces heures pour relancer.", estimate()),
     rulesCard(p, f),
     purchaseCard(p),
     h("h2", { class: "section-title" }, "Calendrier des relances"),
@@ -441,7 +465,7 @@ function heroesTab(p: DashboardProps, f: Forecast): HTMLElement {
   const rows = f.heroes.results.map((r) => ({ label: heroLabel(r.chain), result: r }));
   const focusNote =
     p.settings.focus === "buildings"
-      ? h("p", { class: "notice" }, "Priorité bâtiments : les héros finissent seulement leur chantier en cours. ", h("button", { type: "button", class: "link", onClick: p.onStrategy }, "Changer"))
+      ? h("p", { class: "notice" }, "Priorité bâtiments : les héros finissent seulement leur chantier en cours. ", readOnly(p) ? null : h("button", { type: "button", class: "link", onClick: p.onStrategy }, "Changer"))
       : null;
   return h(
     "section",
@@ -495,7 +519,7 @@ function buildingsTab(p: DashboardProps, f: Forecast): HTMLElement {
   const date = (h0: number) => fmtDay(toDate(v.timestamp, h0));
   const focusNote =
     p.settings.focus === "heroes"
-      ? h("p", { class: "notice" }, "Priorité héros : aucun bâtiment n'est prévu pendant le Jam. ", h("button", { type: "button", class: "link", onClick: p.onStrategy }, "Changer"))
+      ? h("p", { class: "notice" }, "Priorité héros : aucun bâtiment n'est prévu pendant le Jam. ", readOnly(p) ? null : h("button", { type: "button", class: "link", onClick: p.onStrategy }, "Changer"))
       : null;
 
   const groupCard = (g: BuildingGroup, rows: BuildingRow[]) => {
@@ -637,7 +661,28 @@ function moreTab(p: DashboardProps, f: Forecast): HTMLElement {
     details("Planning des potions", true, () => potionPlanView(f, v.timestamp)),
     details("Contrôle de l'export", v.report.unknown.length > 0, () => exportCheck(v)),
     details("À propos", false, about),
-    h("button", { type: "button", class: "btn btn-ghost", onClick: p.onNewExport }, "Coller un nouvel export"),
+    h(
+      "section",
+      { class: "card account" },
+      h("div", null, h("p", { class: "hint" }, "Connecté en tant que"), h("p", { class: "brow-name" }, p.me)),
+      h(
+        "div",
+        { class: "button-row" },
+        h("button", { type: "button", class: "btn btn-ghost", onClick: p.onNewExport }, "Coller un nouvel export"),
+        h("button", { type: "button", class: "btn btn-ghost", onClick: p.onLogout }, "Se déconnecter"),
+      ),
+    ),
+  );
+}
+
+/* ---------- Potes ---------- */
+
+function playersTab(p: DashboardProps): HTMLElement {
+  return h(
+    "section",
+    { class: "stack" },
+    sectionHead("Potes", "Classés par avancement du village. Touche un joueur pour voir son plan."),
+    playersView({ ...p.players, me: p.me, onOpen: p.onOpenPlayer }),
   );
 }
 
@@ -652,7 +697,8 @@ export function dashboardView(p: DashboardProps): HTMLElement {
     : p.tab === "buildings" ? buildingsTab(p, f)
     : p.tab === "lab" ? labTab(p, f)
     : p.tab === "progress" ? progressTab(p, f)
-    : p.tab === "more" ? moreTab(p, f)
+    : p.tab === "players" && !readOnly(p) ? playersTab(p)
+    : p.tab === "more" && !readOnly(p) ? moreTab(p, f)
     : summaryTab(p, f);
   return h(
     "div",

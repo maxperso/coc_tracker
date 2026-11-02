@@ -4,127 +4,224 @@ import "@fontsource/inter/latin-600.css";
 import "@fontsource/inter/latin-700.css";
 import "./styles.css";
 
+import type { PlayerProfile, PlayerRow } from "./lib/api";
+import { api, ApiError } from "./lib/client";
 import { parseExport } from "./lib/exportParse";
 import { gameIndex } from "./lib/gamedata";
-import { addSnapshot, loadHistory, parseHistoryFile, saveHistory, snapshotOf, type HistoryStore } from "./lib/history";
+import { snapshotOf, type Snapshot } from "./lib/history";
 import { DEFAULT_SETTINGS, type Settings } from "./lib/plan";
-import { buildVillage, type Village } from "./lib/village";
-import { dashboardView, tabsFor, type Tab } from "./ui/dashboard";
-import { onboardingView } from "./ui/onboarding";
 import { effectiveSettings } from "./lib/recommend";
+import { buildVillage, type Village } from "./lib/village";
+import { authView, type AuthMode } from "./ui/auth";
+import { dashboardView, tabsFor, type Tab } from "./ui/dashboard";
+import { h } from "./ui/dom";
 import { homeView } from "./ui/home";
+import { legalFooter } from "./ui/legal";
+import { onboardingView } from "./ui/onboarding";
+import { playersView } from "./ui/players";
 import { settingsDialog } from "./ui/settings";
 
-// v2 : la plage de sommeil est réglée par défaut (23 h - 7 h).
-const SETTINGS_KEY = "coc-tracker:settings:v2";
-const LAST_EXPORT_KEY = "coc-tracker:last-export:v1";
+type View = "loading" | "auth" | "home" | "onboarding" | "dash" | "players" | "profile";
 
-function storage(): Storage | null {
-  try {
-    const s = window.localStorage;
-    const probe = "coc-tracker:probe";
-    s.setItem(probe, "1");
-    s.removeItem(probe);
-    return s;
-  } catch {
-    return null;
-  }
-}
-
-const store = storage();
-const read = (k: string) => {
-  try {
-    return store?.getItem(k) ?? null;
-  } catch {
-    return null;
-  }
-};
-const write = (k: string, v: string | null) => {
-  try {
-    if (v == null) store?.removeItem(k);
-    else store?.setItem(k, v);
-  } catch {
-    /* stockage plein ou bloqué : on continue sans */
-  }
-};
-
-function loadSettings(): Settings {
-  try {
-    const raw = read(SETTINGS_KEY);
-    if (!raw) return structuredClone(DEFAULT_SETTINGS);
-    const s = JSON.parse(raw) as Partial<Settings>;
-    return { ...structuredClone(DEFAULT_SETTINGS), ...s, potions: { ...DEFAULT_SETTINGS.potions, ...s.potions }, pass: { ...DEFAULT_SETTINGS.pass, ...s.pass } };
-  } catch {
-    return structuredClone(DEFAULT_SETTINGS);
-  }
+interface Loaded {
+  village: Village;
+  history: Snapshot[];
 }
 
 const state: {
-  village: Village | null;
-  error?: string;
+  view: View;
+  me: string | null;
+  auth: { mode: AuthMode; error?: string; busy: boolean };
+  homeError?: string;
   settings: Settings;
   samePass: boolean;
-  history: HistoryStore;
-  /** Écran de choix de stratégie, montré après chaque nouvel export collé. */
-  onboarding: boolean;
+  mine: Loaded | null;
+  /** Nouvel export : le formulaire de stratégie redemande les médailles. */
+  newExport: boolean;
   tab: Tab;
+  players: { rows: PlayerRow[] | null; error?: string };
+  friend: (Loaded & { username: string; settings: Settings }) | null;
+  friendTab: Tab;
 } = {
-  village: null,
-  onboarding: false,
+  view: "loading",
+  me: null,
+  auth: { mode: "login", busy: false },
+  settings: structuredClone(DEFAULT_SETTINGS),
+  samePass: true,
+  mine: null,
+  newExport: false,
   tab: "summary",
-  settings: loadSettings(),
-  samePass: read(`${SETTINGS_KEY}:same`) !== "0",
-  history: loadHistory(store),
+  players: { rows: null },
+  friend: null,
+  friendTab: "summary",
 };
 
 const root = document.getElementById("app")!;
-
-/** Recommandation d'achats mise en cache : elle ne change qu'avec l'export ou les réglages. */
-let effCache: { key: string; value: ReturnType<typeof effectiveSettings> } | null = null;
-function effective(v: Village, s: Settings) {
-  const key = `${v.tag}:${v.timestamp}:${JSON.stringify(s)}`;
-  if (effCache?.key !== key) effCache = { key, value: effectiveSettings(v, s) };
-  return effCache.value;
-}
 let dialog: HTMLDialogElement | null = null;
 
-function analyze(text: string, remember = true): void {
-  const r = parseExport(text.trim());
-  if (!r.ok) {
-    state.error = r.error;
-    state.village = null;
+/** Recommandation d'achats mise en cache : elle ne change qu'avec l'export ou les réglages. */
+const effCache = new Map<string, ReturnType<typeof effectiveSettings>>();
+function effective(v: Village, s: Settings) {
+  const key = `${v.tag}:${v.timestamp}:${JSON.stringify(s)}`;
+  let value = effCache.get(key);
+  if (!value) {
+    if (effCache.size > 20) effCache.clear();
+    value = effectiveSettings(v, s);
+    effCache.set(key, value);
+  }
+  return value;
+}
+
+/** Exports du serveur → village le plus récent et historique pour la courbe et les gains. */
+function loadProfile(p: PlayerProfile): Loaded | null {
+  const villages = p.exports.flatMap((e) => {
+    const r = parseExport(JSON.stringify(e.raw));
+    return r.ok ? [buildVillage(r.value, gameIndex())] : [];
+  });
+  const village = villages.at(-1);
+  return village ? { village, history: villages.map(snapshotOf) } : null;
+}
+
+/** Session expirée : retour à l'écran de connexion. */
+function handleError(e: unknown): string {
+  if (e instanceof ApiError && e.status === 401) {
+    state.me = null;
+    state.view = "auth";
+    state.auth = { mode: "login", busy: false, error: "Ta session a expiré, reconnecte-toi." };
+    render();
+  }
+  return e instanceof Error ? e.message : "Erreur inattendue.";
+}
+
+async function loadMine(): Promise<void> {
+  const [settings, profile] = await Promise.all([api.settings(), api.profile(state.me!)]);
+  state.settings = settings;
+  state.mine = loadProfile(profile);
+  state.view = state.mine ? "dash" : "home";
+}
+
+async function boot(): Promise<void> {
+  try {
+    state.me = (await api.me()).username;
+    await loadMine();
+  } catch (e) {
+    if (!(e instanceof ApiError && e.status === 401)) state.auth.error = handleError(e);
+    state.view = "auth";
+  }
+  render();
+}
+
+async function submitAuth(data: { username: string; password: string; inviteCode: string }) {
+  state.auth = { ...state.auth, busy: true, error: undefined };
+  render();
+  try {
+    const r = state.auth.mode === "register" ? await api.register(data.username, data.password, data.inviteCode) : await api.login(data.username, data.password);
+    state.me = r.username;
+    state.auth = { mode: "login", busy: false };
+    await loadMine();
+  } catch (e) {
+    state.auth = { ...state.auth, busy: false, error: e instanceof Error ? e.message : "Erreur inattendue." };
+  }
+  render();
+}
+
+async function submitExport(text: string) {
+  const local = parseExport(text.trim());
+  if (!local.ok) {
+    state.homeError = local.error;
     render();
     document.getElementById("export-input")?.focus();
     return;
   }
-  state.error = undefined;
-  state.village = buildVillage(r.value, gameIndex());
-  state.history = addSnapshot(state.history, snapshotOf(state.village));
-  saveHistory(state.history, store);
-  if (remember) write(LAST_EXPORT_KEY, text.trim());
-  state.onboarding = remember;
-  state.tab = "summary";
+  try {
+    await api.uploadExport(text.trim());
+    const profile = await api.profile(state.me!);
+    state.mine = loadProfile(profile);
+    state.homeError = undefined;
+    state.newExport = true;
+    state.tab = "summary";
+    state.view = "onboarding";
+  } catch (e) {
+    state.homeError = handleError(e);
+  }
   render();
   window.scrollTo(0, 0);
 }
 
-function setSettings(next: Settings): void {
+let saveTimer: ReturnType<typeof setTimeout> | undefined;
+/** Réglages : affichés tout de suite, enregistrés sur le serveur un instant plus tard. */
+function setSettings(next: Settings, immediate = false): Promise<void> {
   state.settings = next;
-  write(SETTINGS_KEY, JSON.stringify(next));
+  render();
+  clearTimeout(saveTimer);
+  const save = () => api.saveSettings(next).then(() => {}, (e) => void handleError(e));
+  if (immediate) return save();
+  saveTimer = setTimeout(save, 600);
+  return Promise.resolve();
+}
+
+async function loadPlayers() {
+  try {
+    state.players = { rows: await api.players() };
+  } catch (e) {
+    state.players = { rows: null, error: handleError(e) };
+  }
   render();
 }
 
-function openSettings(): void {
-  dialog?.showModal();
+async function openPlayer(username: string) {
+  if (username.toLowerCase() === state.me?.toLowerCase()) {
+    state.view = state.mine ? "dash" : "home";
+    state.tab = "summary";
+    render();
+    return;
+  }
+  try {
+    const p = await api.profile(username);
+    const loaded = loadProfile(p);
+    if (!loaded) return;
+    state.friend = { ...loaded, username: p.username, settings: p.settings };
+    state.friendTab = "summary";
+    state.view = "profile";
+  } catch (e) {
+    state.players = { ...state.players, error: handleError(e) };
+  }
+  render();
+  window.scrollTo(0, 0);
 }
 
-function download(name: string, content: string): void {
-  const url = URL.createObjectURL(new Blob([content], { type: "application/json" }));
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = name;
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+async function logout() {
+  await api.logout().catch(() => {});
+  state.me = null;
+  state.mine = null;
+  state.friend = null;
+  state.players = { rows: null };
+  state.view = "auth";
+  state.auth = { mode: "login", busy: false };
+  render();
+}
+
+function goTab(t: Tab) {
+  state.tab = t;
+  if (t === "players") void loadPlayers();
+  render();
+  window.scrollTo(0, 0);
+}
+
+/** Classement seul, pour qui n'a pas encore envoyé d'export. */
+function playersPage(): HTMLElement {
+  return h(
+    "main",
+    { class: "page" },
+    h(
+      "div",
+      { class: "section-head" },
+      h("div", null, h("h1", { class: "title" }, "Potes"), h("p", { class: "lead" }, "Classés par avancement du village.")),
+      h("button", { type: "button", class: "btn btn-ghost", onClick: () => ((state.view = "home"), render()) }, "Coller mon export"),
+    ),
+    playersView({ ...state.players, me: state.me!, onOpen: (u) => void openPlayer(u) }),
+    legalFooter(),
+  );
 }
 
 function render(): void {
@@ -135,79 +232,115 @@ function render(): void {
   dialog?.remove();
   dialog = null;
 
-  if (!state.village) {
-    root.append(homeView({ error: state.error, onSubmit: (t) => analyze(t) }));
-    return;
+  switch (state.view) {
+    case "loading":
+      root.append(h("main", { class: "page home" }, h("p", { class: "muted center" }, "Chargement…")));
+      return;
+    case "auth":
+      root.append(
+        authView({
+          ...state.auth,
+          onMode: (mode) => ((state.auth = { mode, busy: false }), render()),
+          onSubmit: (d) => void submitAuth(d),
+        }),
+      );
+      return;
+    case "home":
+      root.append(
+        homeView({
+          error: state.homeError,
+          onSubmit: (t) => void submitExport(t),
+          onPlayers: () => {
+            state.view = "players";
+            void loadPlayers();
+          },
+          onCancel: state.mine ? () => ((state.view = "dash"), render()) : undefined,
+          onLogout: () => void logout(),
+        }),
+      );
+      return;
+    case "players":
+      root.append(playersPage());
+      return;
+    case "onboarding":
+      if (!state.mine) {
+        state.view = "home";
+        return render();
+      }
+      root.append(
+        onboardingView({
+          village: state.mine.village,
+          settings: state.settings,
+          canCancel: !state.newExport,
+          askMedals: state.newExport,
+          onDone: (next) => {
+            state.newExport = false;
+            state.view = "dash";
+            state.tab = "summary";
+            void setSettings(next, true);
+            window.scrollTo(0, 0);
+          },
+          onCancel: () => ((state.view = "dash"), render()),
+        }),
+      );
+      return;
   }
-  const v = state.village;
-  if (state.onboarding) {
-    const firstTime = !root.dataset.seenDashboard;
-    root.append(
-      onboardingView({
-        village: v,
-        settings: state.settings,
-        canCancel: !firstTime,
-        askMedals: firstTime,
-        onDone: (next) => {
-          state.onboarding = false;
-          state.tab = "summary";
-          setSettings(next);
-          window.scrollTo(0, 0);
-        },
-        onCancel: () => {
-          state.onboarding = false;
-          render();
-        },
-      }),
-    );
-    return;
+
+  const friend = state.view === "profile" ? state.friend : null;
+  const loaded = friend ?? state.mine;
+  if (!loaded) {
+    state.view = "home";
+    return render();
   }
-  root.dataset.seenDashboard = "1";
-  if (!tabsFor(state.settings).includes(state.tab)) state.tab = "summary";
-  const eff = effective(v, state.settings);
+  const settings = friend ? friend.settings : state.settings;
+  const eff = effective(loaded.village, settings);
+  const owner = friend ? friend.username : state.me!;
+  const tab = friend ? state.friendTab : state.tab;
+  if (!tabsFor(settings, !!friend).includes(tab)) {
+    if (friend) state.friendTab = "summary";
+    else state.tab = "summary";
+    return render();
+  }
+
   const view = dashboardView({
-    village: v,
+    village: loaded.village,
     settings: eff.settings,
     purchase: eff.purchase,
-    history: state.history[v.tag] ?? [],
-    storageOk: store != null,
-    tab: state.tab,
+    history: loaded.history,
+    me: state.me!,
+    owner,
+    players: state.players,
+    tab,
     onTab: (t) => {
-      state.tab = t;
-      render();
-      window.scrollTo(0, 0);
+      if (friend) {
+        state.friendTab = t;
+        render();
+        window.scrollTo(0, 0);
+      } else goTab(t);
     },
     onStrategy: () => {
-      state.onboarding = true;
+      state.view = "onboarding";
       render();
       window.scrollTo(0, 0);
     },
-    onSettings: openSettings,
-    onNewExport: () => {
-      state.village = null;
-      delete root.dataset.seenDashboard;
-      write(LAST_EXPORT_KEY, null);
-      render();
+    onSettings: () => dialog?.showModal(),
+    onNewExport: () => ((state.view = "home"), render()),
+    onOpenPlayer: (u) => void openPlayer(u),
+    onBack: () => {
+      state.view = state.mine ? "dash" : "players";
+      if (state.mine) goTab("players");
+      else render();
     },
-    onExportHistory: () => download("historique-hammer-jam.json", JSON.stringify(state.history, null, 1)),
-    onImportHistory: async (file) => {
-      const parsed = parseHistoryFile(await file.text());
-      if (!parsed) return alert("Fichier d'historique invalide.");
-      let merged = state.history;
-      for (const list of Object.values(parsed)) for (const s of list) merged = addSnapshot(merged, s);
-      state.history = merged;
-      saveHistory(merged, store);
-      render();
-    },
+    onLogout: () => void logout(),
   });
   for (const d of view.querySelectorAll("details")) {
     if (openDetails.has(d.querySelector("h2")?.textContent ?? "")) d.open = true;
   }
   root.append(view);
 
-  dialog = settingsDialog(state.settings, eff.settings, state.samePass, setSettings, (same) => {
+  if (friend) return;
+  dialog = settingsDialog(state.settings, eff.settings, state.samePass, (s) => void setSettings(s), (same) => {
     state.samePass = same;
-    write(`${SETTINGS_KEY}:same`, same ? "1" : "0");
   });
   document.body.append(dialog);
   if (wasOpen) {
@@ -216,6 +349,5 @@ function render(): void {
   }
 }
 
-const last = read(LAST_EXPORT_KEY);
-if (last) analyze(last, false);
-else render();
+render();
+void boot();
