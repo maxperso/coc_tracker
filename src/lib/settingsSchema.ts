@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { CWL_HEROES, CWL_MAX_DAYS } from "./cwl";
 import { DEFAULT_SETTINGS, type Settings } from "./plan";
 
 const hour = z.number().int().min(0).max(23);
@@ -17,6 +18,13 @@ export const SettingsSchema = z.object({
   autoPurchases: z.boolean(),
   sleep: z.object({ start: hour, end: hour }).nullable(),
   countBuildingTimers: z.boolean(),
+  cwl: z.object({
+    enabled: z.boolean(),
+    firstDay: z.string().regex(/^(\d{4}-\d{2}-\d{2})?$/),
+    days: z.number().int().min(1).max(CWL_MAX_DAYS),
+    hour,
+    heroes: z.array(z.string().max(40)).max(CWL_HEROES),
+  }),
 });
 
 /** Réglages lisibles même s'ils viennent d'une ancienne version : les champs manquants prennent la valeur par défaut. */

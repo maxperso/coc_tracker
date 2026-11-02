@@ -1,5 +1,7 @@
+import { CWL_HEROES, CWL_MAX_DAYS, cwlHeroKeys } from "../lib/cwl";
 import type { Settings } from "../lib/plan";
 import { GOLD_PASS_STEPS, JAM } from "../lib/rules";
+import { addDays, fmtDay, parisDayKey, parisTimeToUnix } from "../lib/time";
 import { h, nf } from "./dom";
 import { sleepControl } from "./sleep";
 
@@ -43,6 +45,67 @@ const field = (id: string, label: string, control: HTMLElement, hint?: string) =
 const checkField = (id: string, label: string, control: HTMLElement, hint?: string) =>
   h("div", { class: "field field-check" }, control, h("label", { for: id }, label, hint ? h("span", { class: "hint" }, hint) : null));
 
+export interface HeroOption {
+  /** Clé de chaîne, « heroes:<id> ». */
+  key: string;
+  label: string;
+}
+
+/** Ligue de clans : jours et heure d'attaque, héros à garder libres. */
+function cwlFieldset(s: Settings, heroes: HeroOption[], set: (patch: (d: Settings) => void) => void): HTMLElement {
+  const c = s.cwl;
+  const on = checkField(
+    "cwl-on",
+    "Je fais la Ligue de clans",
+    check("cwl-on", c.enabled, (v) => set((d) => {
+      d.cwl.enabled = v;
+      if (v && !d.cwl.firstDay) d.cwl.firstDay = parisDayKey(new Date());
+    })),
+    `Le plan garde ${CWL_HEROES} héros libres à ton heure d'attaque, chaque jour de la ligue.`,
+  );
+  if (!c.enabled) return h("fieldset", null, h("legend", null, "Ligue de clans"), on);
+
+  const day = h("input", { id: "cwl-day", class: "input", type: "date", value: c.firstDay, required: true });
+  day.addEventListener("change", () => {
+    if (/^\d{4}-\d{2}-\d{2}$/.test(day.value)) set((d) => { d.cwl.firstDay = day.value; });
+  });
+  const hours = Array.from({ length: 24 }, (_, i) => [i, `${i} h`] as [number, string]);
+  const days = Array.from({ length: CWL_MAX_DAYS }, (_, i) => [i + 1, i + 1 === CWL_MAX_DAYS ? `${i + 1} (ligue entière)` : String(i + 1)] as [number, string]);
+
+  const chosen = new Set(cwlHeroKeys(c, heroes));
+  const heroChecks = heroes.map((hero, i) => {
+    const id = `cwl-hero-${i}`;
+    const box = check(id, chosen.has(hero.key), (v) => set((d) => {
+      d.cwl.heroes = heroes.filter((x) => (x.key === hero.key ? v : chosen.has(x.key))).map((x) => x.key);
+    }));
+    // Au plus 4 héros, au moins 1.
+    if (chosen.has(hero.key) ? chosen.size === 1 : chosen.size >= CWL_HEROES) box.disabled = true;
+    return h("div", { class: "field field-check" }, box, h("label", { for: id }, hero.label));
+  });
+
+  const first = c.firstDay ? new Date(parisTimeToUnix(c.firstDay, 12) * 1000) : null;
+  const last = c.firstDay ? new Date(parisTimeToUnix(addDays(c.firstDay, c.days - 1), 12) * 1000) : null;
+  return h(
+    "fieldset",
+    null,
+    h("legend", null, "Ligue de clans"),
+    on,
+    h("div", { class: "grid-2" },
+      field("cwl-day", "Premier jour d'attaque", day),
+      field("cwl-hour", "Heure de l'attaque", select("cwl-hour", c.hour, hours, (v) => set((d) => { d.cwl.hour = v; }))),
+    ),
+    field("cwl-days", "Jours d'attaque", select("cwl-days", c.days, days, (v) => set((d) => { d.cwl.days = v; }))),
+    h("div", { class: "field" },
+      h("p", { class: "form-label" }, `Héros emmenés (${chosen.size}/${CWL_HEROES})`),
+      h("div", { class: "grid-2 cwl-heroes" }, heroChecks),
+    ),
+    h("p", { class: "hint" },
+      first && last
+        ? `Du ${fmtDay(first)} au ${fmtDay(last)}, à ${c.hour} h (heure de Paris). Ces héros ne partent en amélioration que si elle finit avant l'attaque suivante ; les autres héros ne changent pas.`
+        : "Choisis le premier jour d'attaque."),
+  );
+}
+
 /** `effective` : réglages réellement utilisés (achats recommandés si le mode automatique est actif). */
 export function settingsDialog(
   s: Settings,
@@ -52,6 +115,8 @@ export function settingsDialog(
   onSame: (v: boolean) => void,
   /** Choix de l'apparence, affiché en tête des réglages. */
   appearance?: HTMLElement,
+  /** Héros du village, pour choisir ceux de la Ligue de clans. */
+  heroes: HeroOption[] = [],
 ): HTMLDialogElement {
   const set = (patch: (d: Settings) => void) => {
     const next = structuredClone(s);
@@ -120,6 +185,8 @@ export function settingsDialog(
       h("fieldset", null, h("legend", null, "Sommeil"),
         sleepControl("set-sleep", s.sleep, (sl) => set((d) => { d.sleep = sl; })),
       ),
+
+      cwlFieldset(s, heroes, set),
     ),
   );
   return dlg;

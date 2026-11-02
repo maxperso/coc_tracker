@@ -10,7 +10,7 @@ import { parseExport } from "./lib/exportParse";
 import { gameIndex } from "./lib/gamedata";
 import { snapshotOf, type Snapshot } from "./lib/history";
 import demoExport from "./data/demo.json";
-import { DEFAULT_SETTINGS, type Settings } from "./lib/plan";
+import { DEFAULT_SETTINGS, heroChains, heroLabel, type Settings } from "./lib/plan";
 import { effectiveSettings } from "./lib/recommend";
 import { canInstall, disablePush, enablePush, install, isIos, isStandalone, onPwaChange, pushState, registerServiceWorker, type PushState } from "./lib/pwa";
 import { applyTheme, loadTheme, saveTheme, type ThemePref } from "./lib/theme";
@@ -559,6 +559,7 @@ function renderView(): void {
       state.samePass = same;
     },
     themeControl(theme, setTheme),
+    heroChains(loaded.village).map((c) => ({ key: c.key, label: heroLabel(c) })),
   );
   document.body.append(dialog);
   if (wasOpen) {

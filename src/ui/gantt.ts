@@ -1,3 +1,4 @@
+import type { Blackout } from "../lib/cwl";
 import { maxLevel } from "../lib/gamedata";
 import { isAsleep, type Sleep } from "../lib/potionPlan";
 import { levelAt, levelLaunched, type ChainResult } from "../lib/sim";
@@ -37,13 +38,22 @@ function waits(r: ChainResult): { start: number; end: number }[] {
   return out;
 }
 
-export function ganttCard(rows: GanttRow[], exportUnix: number, jamEndH: number, th: number, sleep: Sleep | null): HTMLElement {
+export function ganttCard(rows: GanttRow[], exportUnix: number, jamEndH: number, th: number, sleep: Sleep | null, cwl: Blackout | null = null): HTMLElement {
   const lastEnd = Math.max(jamEndH, ...rows.flatMap((r) => r.result.segments.map((s) => s.end)));
   const span = Math.max(jamEndH * 1.02, lastEnd * 1.01);
   const date = (x: number) => toDate(exportUnix, x);
   const nowH = (Date.now() / 1000 - exportUnix) / 3600;
   const showNow = nowH > 0.5 && nowH < span;
   let anyWait = false;
+  let anyCwl = false;
+  const cwlFrom = cwl ? cwl.windows[0].start : Infinity;
+  const cwlTo = cwl ? cwl.windows.at(-1)!.end : -Infinity;
+  const waitReason = (key: string, g: { start: number; end: number }) =>
+    cwl?.keys.has(key) && g.end >= cwlFrom - 1e-6 && g.start <= cwlTo + 1e-6
+      ? "gardé libre pour la Ligue de clans"
+      : isAsleep(exportUnix, g.start + 0.05, sleep)
+        ? "tu dors, relance au réveil"
+        : "aucun ouvrier libre";
 
   const list = rows.map(({ label, result }) => {
     const from = result.chain.startLevel;
@@ -96,9 +106,15 @@ export function ganttCard(rows: GanttRow[], exportUnix: number, jamEndH: number,
             h("span", {
               class: "seg seg-wait",
               style: { left: pct(g.start, span), width: pct(g.end - g.start, span) },
-              title: `En attente ${fmtDuration((g.end - g.start) * 3600)} : ${isAsleep(exportUnix, g.start + 0.05, sleep) ? "tu dors, relance au réveil" : "aucun ouvrier libre"}`,
+              title: `En attente ${fmtDuration((g.end - g.start) * 3600)} : ${waitReason(result.chain.key, g)}`,
             }),
           ),
+          cwl?.keys.has(result.chain.key)
+            ? ((anyCwl = true),
+              cwl.windows.map((w) =>
+                h("span", { class: "cwl-mark", style: { left: pct(w.start, span) }, title: `Attaque de LDC le ${fmtDateTime(date(w.start))}` }),
+              ))
+            : null,
           result.segments
             .filter((s) => s.end > s.start)
             .map((s) =>
@@ -130,7 +146,8 @@ export function ganttCard(rows: GanttRow[], exportUnix: number, jamEndH: number,
       { class: "legend hint" },
       h("span", { class: "key key-done" }), "fini avant la fin du Jam",
       h("span", { class: "key key-maybe" }), "fini après",
-      anyWait ? [h("span", { class: "key key-wait" }), "en attente (sommeil ou ouvrier occupé)"] : null,
+      anyWait ? [h("span", { class: "key key-wait" }), cwl ? "en attente (sommeil, ouvrier occupé ou LDC)" : "en attente (sommeil ou ouvrier occupé)"] : null,
+      anyCwl ? [h("span", { class: "key key-cwl" }), "attaque de LDC"] : null,
       showNow ? [h("span", { class: "key key-now" }), "maintenant"] : null,
       h("span", { class: "key key-end" }), "fin du Jam",
     ),

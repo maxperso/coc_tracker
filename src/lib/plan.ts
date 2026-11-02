@@ -1,4 +1,5 @@
 import { isPermanentBuilding, priorityRank } from "./buildings";
+import { DEFAULT_CWL, cwlBlackout, type Blackout, type Cwl } from "./cwl";
 import { HERO_SHORT, maxLevel, stepCost, type Gates } from "./gamedata";
 import type { ResolvedItem } from "./exportParse";
 import { planPotions, prunePlan, type PotionPlan, type Sleep } from "./potionPlan";
@@ -37,6 +38,8 @@ export interface Settings {
   sleep: Sleep | null;
   /** Prendre en compte les bâtiments en cours dans l'export (ils occupent un ouvrier). */
   countBuildingTimers: boolean;
+  /** Ligue de clans : héros gardés libres à l'heure d'attaque. */
+  cwl: Cwl;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -55,6 +58,7 @@ export const DEFAULT_SETTINGS: Settings = {
   autoPurchases: true,
   sleep: { start: 23, end: 7 },
   countBuildingTimers: true,
+  cwl: DEFAULT_CWL,
 };
 
 export function buildChain(item: ResolvedItem, gates: Gates, scope: BoostScope, hammerable = false): Chain {
@@ -149,6 +153,7 @@ function runPool(
   policy: Policy,
   hammers: number[] = [],
   cfg: JamConfig = JAM,
+  blackout?: Blackout,
 ): PoolForecast {
   const tHours = hoursBetween(v.timestamp, cfg.end);
   const plan = planPotions({
@@ -160,7 +165,7 @@ function runPool(
     sleep: s.sleep,
   });
   const run = (starts: number[]) =>
-    simulate({ exportUnix: v.timestamp, jamEndH: tHours, slots, clock: new WorkClock(starts, extraHours), chains, pass: s.pass, policy, sleep: s.sleep, hammers, cfg });
+    simulate({ exportUnix: v.timestamp, jamEndH: tHours, slots, clock: new WorkClock(starts, extraHours), chains, pass: s.pass, policy, sleep: s.sleep, hammers, cfg, blackout });
   let sim = run(plan.starts);
   // Une potion n'agit que sur les chantiers actifs : on retire celles qui tombent à vide.
   const clock = new WorkClock(plan.starts, extraHours);
@@ -199,6 +204,8 @@ export interface Forecast {
   buildings: PoolForecast;
   /** Ouvriers occupés dans l'export (tous chantiers confondus) et ouvriers disponibles. */
   builderSlots: number;
+  /** Ligue de clans : heures d'attaque à venir et héros gardés libres ; null sans LDC. */
+  cwl: Blackout | null;
   busyAtExport: number;
   labBest: PoolForecast;
   labWorst: PoolForecast;
@@ -220,16 +227,18 @@ export function builderChains(v: Village, s: Settings): { heroes: Chain[]; build
   return { heroes, buildings, other: guardianChains(v) };
 }
 
-export type BuilderForecast = Pick<Forecast, "heroes" | "buildings" | "builderSlots" | "busyAtExport">;
+export type BuilderForecast = Pick<Forecast, "heroes" | "buildings" | "builderSlots" | "busyAtExport" | "cwl">;
 
 /** Pool des ouvriers seul : sert aux recherches rapides (recommandation d'achats). */
 export function builderForecast(v: Village, s: Settings, cfg: JamConfig = JAM): BuilderForecast {
   const { heroes, buildings, other } = builderChains(v, s);
   const builderSlots = s.builders + (s.goblinBuilder ? 1 : 0);
   const tHours = hoursBetween(v.timestamp, cfg.end);
+  const cwl = cwlBlackout(s.cwl, v.timestamp, heroes) ?? null;
   const pool = runPool(
     v, s, [...heroes, ...buildings, ...other], builderSlots, s.potions.builder, cfg.potions.builder.extraHours, "mostRemaining",
     s.focus === "buildings" ? [] : hammerTimes(s.heroHammers, tHours, cfg), cfg,
+    cwl ?? undefined,
   );
   const subset = (chains: Chain[]): PoolForecast => {
     const results = pool.results.filter((r) => chains.includes(r.chain));
@@ -240,6 +249,7 @@ export function builderForecast(v: Village, s: Settings, cfg: JamConfig = JAM): 
     heroes: subset(heroes),
     buildings: subset(buildings),
     builderSlots,
+    cwl,
     busyAtExport: [...heroes, ...buildings, ...other].filter((c) => c.inProgress).length,
   };
 }

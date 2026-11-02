@@ -7,9 +7,12 @@ export type Pool = "builder" | "lab" | "pet";
 
 export type PlanEvent =
   | { t: number; kind: "launch"; pool: Pool; result: ChainResult; seg: Segment }
-  | { t: number; kind: "potion"; pool: Pool; count: number; buy: number };
+  | { t: number; kind: "potion"; pool: Pool; count: number; buy: number }
+  /** Attaque de Ligue de clans : les héros emmenés sont libres. */
+  | { t: number; kind: "attack"; pool: Pool; heroes: ChainResult[] };
 
 const POOL_ORDER: Record<Pool, number> = { builder: 0, lab: 1, pet: 2 };
+const KIND_ORDER: Record<PlanEvent["kind"], number> = { launch: 0, potion: 1, attack: 2 };
 
 /** Toutes les actions à faire, dans l'ordre : relances de chantiers et prises de potions. */
 export function planEvents(f: Forecast): PlanEvent[] {
@@ -32,10 +35,12 @@ export function planEvents(f: Forecast): PlanEvent[] {
   potions(f.heroes, "builder");
   potions(f.labBest, "lab");
   potions(f.pets, "pet");
+  if (f.cwl) {
+    const heroes = f.heroes.results.filter((r) => f.cwl!.keys.has(r.chain.key));
+    for (const w of f.cwl.windows) events.push({ t: Math.max(0, w.start), kind: "attack", pool: "builder", heroes });
+  }
   // À instant égal : d'abord relancer, puis boire (une potion n'agit que sur les chantiers actifs).
-  return events.sort(
-    (a, b) => a.t - b.t || (a.kind === b.kind ? 0 : a.kind === "launch" ? -1 : 1) || POOL_ORDER[a.pool] - POOL_ORDER[b.pool],
-  );
+  return events.sort((a, b) => a.t - b.t || KIND_ORDER[a.kind] - KIND_ORDER[b.kind] || POOL_ORDER[a.pool] - POOL_ORDER[b.pool]);
 }
 
 /** Regroupe les actions par jour, en heure de Paris. */

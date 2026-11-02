@@ -79,3 +79,22 @@ export function fmtDuration(seconds: number): string {
   if (m || !out.length) out.push(`${m} min`);
   return out.join(" ");
 }
+
+/** Instant Unix (secondes) d'une heure pleine à Paris, ex. ("2026-11-03", 20) → 3 nov. à 20 h. */
+export function parisTimeToUnix(dayKey: string, hour: number): number {
+  const [y, m, d] = dayKey.split("-").map(Number);
+  const target = Date.UTC(y, m - 1, d, hour);
+  let t = target;
+  // Deux corrections suffisent, même le jour d'un changement d'heure.
+  for (let i = 0; i < 2; i++) {
+    const p = parisParts(new Date(t));
+    t += target - Date.UTC(p.y, p.m - 1, p.d, p.h, p.min);
+  }
+  return t / 1000;
+}
+
+/** « 2026-11-03 » + n jours. */
+export function addDays(dayKey: string, n: number): string {
+  const [y, m, d] = dayKey.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d + n)).toISOString().slice(0, 10);
+}

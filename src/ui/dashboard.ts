@@ -2,7 +2,8 @@ import { GROUP_LABEL, groupOf, isPermanentBuilding, priorityRank, type BuildingG
 import { displayName, findByName, gameIndex, maxLevel, type Entry } from "../lib/gamedata";
 import type { PlayerRow } from "../lib/api";
 import type { Snapshot } from "../lib/history";
-import { FOCUS_LABEL, forecast, heroLabel, wallSummary, type Focus, type Forecast, type PoolForecast, type Settings } from "../lib/plan";
+import { overlaps } from "../lib/cwl";
+import { builderForecast, FOCUS_LABEL, forecast, heroLabel, wallSummary, type Focus, type Forecast, type PoolForecast, type Settings } from "../lib/plan";
 import { globalPct, pct, progress, progressCurve } from "../lib/progress";
 import type { Purchase } from "../lib/recommend";
 import { JAM } from "../lib/rules";
@@ -597,7 +598,7 @@ function summaryTab(p: DashboardProps, f: Forecast): HTMLElement {
       "div",
       { class: "strategy" },
       focusSwitch(p),
-      h("span", { class: "strategy-meta" }, `${passText} · ${s.builders + (s.goblinBuilder ? 1 : 0)} ouvriers · ${nf(s.medals)} médailles · ${sleepLabel(s.sleep)}`),
+      h("span", { class: "strategy-meta" }, `${passText} · ${s.builders + (s.goblinBuilder ? 1 : 0)} ouvriers · ${nf(s.medals)} médailles · ${sleepLabel(s.sleep)}${f.cwl ? ` · LDC à ${s.cwl.hour} h` : ""}`),
       ro ? null : h("button", { type: "button", class: "link", onClick: p.onSettings }, "Réglages"),
     ),
     exportAgeNotice(p),
@@ -729,6 +730,23 @@ function eventRow(p: DashboardProps, e: PlanEvent, exportUnix: number, T: number
     );
     return li;
   }
+  if (e.kind === "attack") {
+    const castle = findByName(gameIndex(), "buildings", "Clan Castle");
+    li = h(
+      "li",
+      { class: `ev ev-attack${done}` },
+      h("span", { class: "ev-time" }, when),
+      castle ? sprite("buildings", castle, castle.levels?.at(-1)?.l, "sm") : h("span"),
+      h(
+        "div",
+        { class: "ev-main" },
+        h("p", { class: "ev-text" }, "Attaque de Ligue de clans"),
+        h("p", { class: "hint" }, e.heroes.length ? `${e.heroes.map((r) => heroLabel(r.chain)).join(", ")} libres pour l'attaque` : "Aucun héros gardé"),
+      ),
+      doneBox(p, key, "attaque de LDC", () => li, onToggle),
+    );
+    return li;
+  }
   const r = e.result;
   li = h(
     "li",
@@ -757,7 +775,8 @@ function calendar(p: DashboardProps, f: Forecast, exportUnix: number): HTMLEleme
     { class: "stack-sm" },
     days.map(([day, events]) => {
       const launches = events.filter((e) => e.kind === "launch").length;
-      const title = `${fmtWeekday(new Date(`${day}T12:00:00Z`))} · ${launches} relance${launches > 1 ? "s" : ""}`;
+      const attack = events.some((e) => e.kind === "attack");
+      const title = `${fmtWeekday(new Date(`${day}T12:00:00Z`))} · ${launches} relance${launches > 1 ? "s" : ""}${attack ? " · LDC" : ""}`;
       const keys = events.map((e) => eventKey(e, exportUnix));
       const count = h("span", { class: "day-count" });
       const update = () => {
@@ -846,6 +865,51 @@ function costLine(results: ChainResult[]): string {
   return [...byRes].map(([k, v]) => `${compact(v)} ${k}`).join(" · ") || "rien à payer";
 }
 
+/** Ligue de clans : jours d'attaque, héros gardés, et ce que ça coûte en niveaux. */
+function cwlCard(p: DashboardProps, f: Forecast): HTMLElement | null {
+  if (!f.cwl) return null;
+  const v = p.village;
+  const { windows, keys } = f.cwl;
+  const kept = f.heroes.results.filter((r) => keys.has(r.chain.key));
+  const T = f.heroes.tHours;
+  const free = builderForecast(v, { ...p.settings, cwl: { ...p.settings.cwl, enabled: false } });
+  const lost = free.heroes.gainedLaunched - f.heroes.gainedLaunched;
+  // Chantiers déjà en cours dans l'export qui tombent sur une attaque : le plan n'y peut rien.
+  const clashes = kept.flatMap((r) =>
+    r.segments
+      .filter((s) => s.inProgressAtExport)
+      .flatMap((s) => windows.filter((w) => overlaps(s.start, s.end, w)).map((w) => `${heroLabel(r.chain)} sera encore en amélioration le ${fmtDay(toDate(v.timestamp, w.start))}`)),
+  );
+  const first = toDate(v.timestamp, windows[0].start);
+  const last = toDate(v.timestamp, windows.at(-1)!.start);
+  return h(
+    "section",
+    { class: "card cwl-card" },
+    h(
+      "div",
+      { class: "card-head" },
+      h("h2", { class: "card-title" }, "Ligue de clans"),
+      readOnly(p) ? null : h("button", { type: "button", class: "link", onClick: p.onSettings }, "Régler"),
+    ),
+    h(
+      "p",
+      null,
+      h("strong", null, kept.map((r) => heroLabel(r.chain)).join(", ")),
+      // « 9 nov. » finit déjà par un point.
+      ` restent libres à ${fmtHour(first)}, ${windows.length > 1 ? `du ${fmtDay(first)} au ${fmtDay(last)}` : `le ${fmtDay(first)}`}`.replace(/\.?$/, "."),
+    ),
+    h(
+      "p",
+      { class: "muted" },
+      lost > 0
+        ? `Coût : ${lost} ${plural(lost, "niveau")} de héros en moins d'ici la fin du Jam. Les héros gardés ne partent en amélioration que si elle finit avant l'attaque suivante.`
+        : "Aucun niveau de héros perdu : les chantiers tombent entre les attaques.",
+    ),
+    clashes.length ? h("ul", { class: "alert-list" }, clashes.map((c) => h("li", { class: "alert" }, `${c} : chantier lancé avant ton export.`))) : null,
+    T < windows.at(-1)!.end ? h("p", { class: "hint" }, "La ligue continue après la fin du Jam : seuls les jours avant la fin changent le plan.") : null,
+  );
+}
+
 function heroesTab(p: DashboardProps, f: Forecast): HTMLElement {
   const v = p.village;
   const T = f.heroes.tHours;
@@ -860,7 +924,8 @@ function heroesTab(p: DashboardProps, f: Forecast): HTMLElement {
     villageSwitch(p),
     sectionHead("Héros", `+${f.heroes.gainedLaunched} ${plural(f.heroes.gainedLaunched, "niveau")} pendant le Jam`, estimate()),
     focusNote,
-    rows.length ? ganttCard(rows, v.timestamp, T, v.th, p.settings.sleep) : h("p", { class: "muted" }, "Aucun héros dans cet export."),
+    cwlCard(p, f),
+    rows.length ? ganttCard(rows, v.timestamp, T, v.th, p.settings.sleep, f.cwl) : h("p", { class: "muted" }, "Aucun héros dans cet export."),
     h("section", { class: "card" }, h("h2", { class: "card-title" }, "Ressources à prévoir"), h("p", { class: "muted" }, costLine(f.heroes.results)), h("p", { class: "hint" }, "Coûts réduits par le Jam, chantiers en cours exclus.")),
   );
 }

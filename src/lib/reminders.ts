@@ -9,9 +9,8 @@ import { fmtHour, parisDayKey, toDate } from "./time";
  * Il ne dépend que de l'export : un nouvel export donne un nouveau plan, donc de nouvelles coches.
  */
 export function eventKey(e: PlanEvent, exportUnix: number): string {
-  return e.kind === "launch"
-    ? `L:${e.result.chain.key}:${e.seg.toLevel}`
-    : `P:${e.pool}:${parisDayKey(toDate(exportUnix, e.t))}`;
+  const day = parisDayKey(toDate(exportUnix, e.t));
+  return e.kind === "launch" ? `L:${e.result.chain.key}:${e.seg.toLevel}` : e.kind === "attack" ? `A:${day}` : `P:${e.pool}:${day}`;
 }
 
 export const MAX_CHECKS = 3000;
@@ -21,6 +20,7 @@ const POTION: Record<Pool, string> = { builder: "d'ouvrier", lab: "de recherche"
 
 export function eventText(e: PlanEvent): string {
   if (e.kind === "potion") return `Bois ${e.count} potion${e.count > 1 ? "s" : ""} ${POTION[e.pool]}`;
+  if (e.kind === "attack") return `Attaque de LDC${e.heroes.length ? ` avec ${e.heroes.map((r) => heroLabel(r.chain)).join(", ")}` : ""}`;
   const c = e.result.chain;
   return `${c.category === "heroes" ? heroLabel(c) : displayName(c.entry)} ${e.seg.toLevel - 1} → ${e.seg.toLevel}`;
 }
@@ -51,12 +51,16 @@ export function planReminders(f: Forecast, exportUnix: number, nowUnix: number):
   return groups.slice(0, MAX_REMINDERS).map((g) => {
     const launches = g.events.filter((e) => e.kind === "launch");
     const potions = g.events.filter((e) => e.kind === "potion");
+    const attack = g.events.find((e) => e.kind === "attack");
     const parts: string[] = [];
+    if (attack) parts.push(eventText(attack));
     if (launches.length) parts.push(`Relance ${launches.map(eventText).join(", ")}`);
     for (const p of potions) parts.push(eventText(p));
-    const title = launches.length
-      ? `${launches.length} chantier${launches.length > 1 ? "s" : ""} à relancer`
-      : "C'est l'heure des potions";
+    const title = attack
+      ? "C'est l'heure de ton attaque de LDC"
+      : launches.length
+        ? `${launches.length} chantier${launches.length > 1 ? "s" : ""} à relancer`
+        : "C'est l'heure des potions";
     return { key: `plan:${g.at}`, at: g.at, title, body: `${parts.join(". ")}.` };
   });
 }
