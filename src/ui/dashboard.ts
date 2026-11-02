@@ -247,6 +247,7 @@ function doneBox(p: DashboardProps, key: string, label: string, row: () => HTMLE
   box.addEventListener("change", () => {
     p.onCheck?.(key, box.checked);
     row()?.classList.toggle("is-done", box.checked);
+    box.classList.toggle("pop", box.checked);
     onToggle?.();
   });
   return box;

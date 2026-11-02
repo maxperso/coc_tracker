@@ -360,10 +360,42 @@ function playersPage(): HTMLElement {
   );
 }
 
+/** Page affichée : quand elle change, les blocs apparaissent en fondu. */
+let shownPage = "";
+const pageKey = () =>
+  state.view === "dash"
+    ? `dash:${state.friend ? `${state.friend.username}:${state.friendTab}` : state.tab}`
+    : state.view === "auth"
+      ? `auth:${state.auth.mode}`
+      : state.view;
+
+/** Blocs animés à l'entrée d'une page, l'un après l'autre. */
+const ENTER_BLOCKS =
+  ".section-head, .strategy, .banner, .village-switch, .tile, .card, .landing-hero, .landing-section, .feature, .player, .choice, .stepper, .notice";
+const MAX_STAGGER = 10;
+let enterTimer: ReturnType<typeof setTimeout> | undefined;
+
 /** Affiche la vue courante, puis le pied de page en bas de l'écran. */
 function render(): void {
+  const key = pageKey();
+  const entering = key !== shownPage;
+  shownPage = key;
   renderView();
   if (!root.querySelector(":scope > .legal")) root.append(legalFooter());
+
+  // Simple mise à jour (réglage, coche…) : pas d'animation, la page ne doit pas clignoter.
+  clearTimeout(enterTimer);
+  root.classList.remove("page-enter");
+  if (!entering) return;
+  let i = 0;
+  for (const e of root.querySelectorAll<HTMLElement>(ENTER_BLOCKS)) {
+    if (e.parentElement?.closest(ENTER_BLOCKS)) continue; // un bloc dans un bloc arrive avec son parent
+    e.dataset.enter = "";
+    e.style.setProperty("--enter", String(Math.min(i++, MAX_STAGGER)));
+  }
+  void root.offsetWidth; // relance l'animation même si la classe vient d'être retirée
+  root.classList.add("page-enter");
+  enterTimer = setTimeout(() => root.classList.remove("page-enter"), 1000);
 }
 
 function renderView(): void {

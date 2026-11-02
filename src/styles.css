@@ -327,6 +327,8 @@ summary:focus-visible,
   position: sticky;
   top: 0;
   z-index: 10;
+  /* App installée : l'en-tête passe sous l'encoche ou la barre d'état. */
+  padding-top: env(safe-area-inset-top);
   background: var(--bg);
   border-bottom: 1px solid var(--border);
 }
@@ -335,7 +337,7 @@ summary:focus-visible,
 .tabs-inner {
   max-width: var(--wide);
   margin: 0 auto;
-  padding: 0 16px;
+  padding: 0 max(16px, env(safe-area-inset-right)) 0 max(16px, env(safe-area-inset-left));
 }
 
 .appbar-inner {
@@ -478,6 +480,8 @@ summary:focus-visible,
   min-height: 100dvh;
   display: flex;
   flex-direction: column;
+  /* Rien ne doit faire défiler la page de côté ; « clip » garde l'en-tête collant. */
+  overflow-x: clip;
 }
 
 #app > :first-child {
@@ -585,7 +589,7 @@ summary:focus-visible,
 
 .segmented {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 4px;
   padding: 4px;
   border-radius: 16px;
@@ -594,7 +598,7 @@ summary:focus-visible,
 }
 
 .segmented.seg-2 {
-  grid-template-columns: repeat(2, 1fr);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .seg-btn {
@@ -653,6 +657,13 @@ summary:focus-visible,
   background: var(--bg);
 }
 
+.focus-switch .seg-btn {
+  padding: 0 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .focus-switch .seg-btn[aria-checked="true"] {
   background: var(--done-tint);
   border-color: var(--done);
@@ -678,8 +689,16 @@ summary:focus-visible,
     width: 100%;
   }
 
+  .focus-switch {
+    min-width: 0;
+  }
+
   .focus-switch .segmented {
     flex: 1;
+  }
+
+  .focus-switch .seg-btn {
+    padding: 0 4px;
   }
 
   .strategy-meta {
@@ -2286,7 +2305,7 @@ legend {
     z-index: 15;
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(0, 1fr));
-    padding: 4px 4px calc(4px + env(safe-area-inset-bottom));
+    padding: 4px max(4px, env(safe-area-inset-right)) calc(4px + env(safe-area-inset-bottom)) max(4px, env(safe-area-inset-left));
     background: var(--bg);
     border-top: 1px solid var(--border);
   }
@@ -2306,6 +2325,14 @@ legend {
     font-size: 0.6875rem;
     font-weight: 600;
     cursor: pointer;
+    min-width: 0;
+  }
+
+  .bnav-item > span {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .bnav-item[aria-current="page"] {
@@ -2519,7 +2546,7 @@ legend {
 
 /* ---------- Apparence ---------- */
 .segmented.seg-3 {
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .theme-control {
@@ -2713,5 +2740,146 @@ select.input {
   .vs-bars li {
     grid-template-columns: 76px minmax(0, 1fr) 40px;
     gap: 8px;
+  }
+}
+
+/* ---------- Mouvements : discrets, et coupés si le système demande moins d'animations ---------- */
+:root {
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+@keyframes enter-rise {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+}
+
+@keyframes enter-grow {
+  from {
+    transform: scaleX(0);
+  }
+}
+
+@keyframes pop {
+  50% {
+    transform: scale(1.18);
+  }
+}
+
+/* Entrée de page : chaque bloc monte en fondu, avec un léger décalage. */
+.page-enter [data-enter] {
+  animation: enter-rise 0.38s var(--ease-out) both;
+  animation-delay: calc(var(--enter, 0) * 45ms);
+}
+
+/* Les barres d'avancement se remplissent depuis la gauche. */
+.page-enter .bar span {
+  transform-origin: left center;
+  animation: enter-grow 0.7s var(--ease-out) 0.18s both;
+}
+
+/* Survol, clic */
+.btn,
+.seg-btn,
+.link,
+.topnav-item,
+.bnav-item,
+.avatar,
+.tile-link,
+.player,
+.vs-item,
+.tab {
+  transition:
+    background-color 0.18s ease,
+    border-color 0.18s ease,
+    color 0.18s ease,
+    box-shadow 0.18s ease,
+    transform 0.12s ease;
+}
+
+.btn:active,
+.seg-btn:active,
+.avatar:active,
+.vs-item:active,
+.topnav-item:active,
+.bnav-item:active,
+.choice:active {
+  transform: scale(0.97);
+}
+
+.btn-primary:hover {
+  box-shadow: 0 4px 14px -6px var(--text);
+}
+
+.link:hover {
+  text-decoration: underline;
+  text-decoration-thickness: 2px;
+  text-underline-offset: 4px;
+}
+
+.tile-link:hover,
+.player:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 20px -14px var(--text);
+}
+
+.tile-link:active,
+.player:active {
+  transform: translateY(0);
+}
+
+.choice {
+  transition:
+    background-color 0.2s ease,
+    border-color 0.2s ease,
+    transform 0.12s ease;
+}
+
+/* Petit rebond : icône de la page qu'on ouvre, case qu'on vient de cocher. */
+.page-enter .bnav-item[aria-current="page"] .icon,
+.page-enter .topnav-item[aria-current="page"] .icon,
+.done-box.pop {
+  animation: pop 0.28s var(--ease-out);
+}
+
+.is-done .todo-text,
+.is-done .ev-text {
+  transition: color 0.2s ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .page-enter [data-enter],
+  .page-enter .bar span,
+  .page-enter .bnav-item[aria-current="page"] .icon,
+  .page-enter .topnav-item[aria-current="page"] .icon,
+  .done-box.pop {
+    animation: none;
+  }
+
+  .btn,
+  .seg-btn,
+  .link,
+  .topnav-item,
+  .bnav-item,
+  .avatar,
+  .tile-link,
+  .player,
+  .vs-item,
+  .tab,
+  .choice {
+    transition: none;
+  }
+
+  .btn:active,
+  .seg-btn:active,
+  .avatar:active,
+  .vs-item:active,
+  .topnav-item:active,
+  .bnav-item:active,
+  .choice:active,
+  .tile-link:hover,
+  .player:hover {
+    transform: none;
   }
 }
