@@ -11,10 +11,12 @@ import { DEFAULT_SETTINGS, type Settings } from "./lib/plan";
 import { buildVillage, type Village } from "./lib/village";
 import { dashboardView, tabsFor, type Tab } from "./ui/dashboard";
 import { onboardingView } from "./ui/onboarding";
+import { effectiveSettings } from "./lib/recommend";
 import { homeView } from "./ui/home";
 import { settingsDialog } from "./ui/settings";
 
-const SETTINGS_KEY = "coc-tracker:settings:v1";
+// v2 : la plage de sommeil est réglée par défaut (23 h - 7 h).
+const SETTINGS_KEY = "coc-tracker:settings:v2";
 const LAST_EXPORT_KEY = "coc-tracker:last-export:v1";
 
 function storage(): Storage | null {
@@ -76,6 +78,14 @@ const state: {
 };
 
 const root = document.getElementById("app")!;
+
+/** Recommandation d'achats mise en cache : elle ne change qu'avec l'export ou les réglages. */
+let effCache: { key: string; value: ReturnType<typeof effectiveSettings> } | null = null;
+function effective(v: Village, s: Settings) {
+  const key = `${v.tag}:${v.timestamp}:${JSON.stringify(s)}`;
+  if (effCache?.key !== key) effCache = { key, value: effectiveSettings(v, s) };
+  return effCache.value;
+}
 let dialog: HTMLDialogElement | null = null;
 
 function analyze(text: string, remember = true): void {
@@ -137,6 +147,7 @@ function render(): void {
         village: v,
         settings: state.settings,
         canCancel: !firstTime,
+        askMedals: firstTime,
         onDone: (next) => {
           state.onboarding = false;
           state.tab = "summary";
@@ -153,9 +164,11 @@ function render(): void {
   }
   root.dataset.seenDashboard = "1";
   if (!tabsFor(state.settings).includes(state.tab)) state.tab = "summary";
+  const eff = effective(v, state.settings);
   const view = dashboardView({
     village: v,
-    settings: state.settings,
+    settings: eff.settings,
+    purchase: eff.purchase,
     history: state.history[v.tag] ?? [],
     storageOk: store != null,
     tab: state.tab,
@@ -192,7 +205,7 @@ function render(): void {
   }
   root.append(view);
 
-  dialog = settingsDialog(state.settings, state.samePass, setSettings, (same) => {
+  dialog = settingsDialog(state.settings, eff.settings, state.samePass, setSettings, (same) => {
     state.samePass = same;
     write(`${SETTINGS_KEY}:same`, same ? "1" : "0");
   });

@@ -6,9 +6,22 @@ export interface Sleep {
   end: number;
 }
 
+/** Heure de Paris par minute Unix : Intl est lent et la simulation pose souvent la même question. */
+const hourCache = new Map<number, number>();
+function cachedParisHour(exportUnix: number, h: number): number {
+  const minute = Math.floor(exportUnix / 60 + h * 60);
+  let x = hourCache.get(minute);
+  if (x === undefined) {
+    if (hourCache.size > 200_000) hourCache.clear();
+    x = parisHourOfDay(new Date(minute * 60_000));
+    hourCache.set(minute, x);
+  }
+  return x;
+}
+
 export function isAsleep(exportUnix: number, h: number, sleep: Sleep | null): boolean {
   if (!sleep || sleep.start === sleep.end) return false;
-  const x = parisHourOfDay(toDate(exportUnix, h));
+  const x = cachedParisHour(exportUnix, h);
   return sleep.start < sleep.end ? x >= sleep.start && x < sleep.end : x >= sleep.start || x < sleep.end;
 }
 

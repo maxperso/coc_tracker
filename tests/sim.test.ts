@@ -120,7 +120,7 @@ describe("chantiers", () => {
 });
 
 describe("prévision sur l'export anonymisé", () => {
-  const s: Settings = { ...DEFAULT_SETTINGS };
+  const s: Settings = { ...DEFAULT_SETTINGS, sleep: null };
   it("construit les chaînes de héros du village principal uniquement", () => {
     const chains = heroChains(village());
     expect(chains.map((c) => c.entry.name).sort()).toEqual(

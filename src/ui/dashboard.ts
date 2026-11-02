@@ -3,21 +3,25 @@ import { displayName, findByName, gameIndex, maxLevel, type Entry } from "../lib
 import type { Snapshot } from "../lib/history";
 import { FOCUS_LABEL, forecast, heroLabel, wallSummary, type Forecast, type PoolForecast, type Settings } from "../lib/plan";
 import { globalPct, pct, progress, progressCurve } from "../lib/progress";
+import type { Purchase } from "../lib/recommend";
 import { JAM } from "../lib/rules";
+import { byDay, finalWave, longestRemaining, planEvents, type PlanEvent, type Pool } from "../lib/schedule";
 import { levelLaunched, type ChainResult } from "../lib/sim";
-import { fmtDateTime, fmtDay, fmtDayLong, fmtDays, fmtHour, hoursBetween, toDate } from "../lib/time";
+import { fmtDateTime, fmtDay, fmtDayLong, fmtDays, fmtHour, fmtWeekday, hoursBetween, toDate } from "../lib/time";
 import type { Village } from "../lib/village";
 import { progressChart } from "./chart";
 import { compact, h, nf } from "./dom";
 import { ganttCard } from "./gantt";
 import { legalFooter } from "./legal";
 import { about, comparison, details, exportCheck, historyView, potionPlanView } from "./more";
+import { sleepLabel } from "./sleep";
 import { sprite } from "./sprite";
 
-export type Tab = "summary" | "heroes" | "buildings" | "lab" | "progress" | "more";
+export type Tab = "summary" | "plan" | "heroes" | "buildings" | "lab" | "progress" | "more";
 
 const TAB_LABEL: Record<Tab, string> = {
   summary: "Résumé",
+  plan: "Plan",
   heroes: "Héros",
   buildings: "Bâtiments",
   lab: "Labo",
@@ -27,13 +31,15 @@ const TAB_LABEL: Record<Tab, string> = {
 
 export function tabsFor(s: Settings): Tab[] {
   return s.focus === "buildings"
-    ? ["summary", "buildings", "heroes", "lab", "progress", "more"]
-    : ["summary", "heroes", "buildings", "lab", "progress", "more"];
+    ? ["summary", "plan", "buildings", "heroes", "lab", "progress", "more"]
+    : ["summary", "plan", "heroes", "buildings", "lab", "progress", "more"];
 }
 
 export interface DashboardProps {
   village: Village;
   settings: Settings;
+  /** Achats recommandés (null si l'utilisateur les saisit à la main). */
+  purchase: Purchase | null;
   history: Snapshot[];
   storageOk: boolean;
   tab: Tab;
@@ -181,7 +187,6 @@ function summaryTab(p: DashboardProps, f: Forecast): HTMLElement {
     : [heroTile, buildingTile, labTile, petTile];
 
   const list = todos(f, v);
-  const potions = f.heroes.plan.starts.length;
   const passText = s.pass.builder ? `Pass d'or ${Math.round(s.pass.builder * 100)} %` : "Sans Pass d'or";
   const g = globalPct(cats);
 
@@ -196,7 +201,7 @@ function summaryTab(p: DashboardProps, f: Forecast): HTMLElement {
     h(
       "div",
       { class: "strategy" },
-      h("span", null, h("strong", null, `Priorité ${FOCUS_LABEL[s.focus].toLowerCase()}`), ` · ${passText} · ${s.builders + (s.goblinBuilder ? 1 : 0)} ouvriers · ${potions} potions d'ouvrier`),
+      h("span", null, h("strong", null, `Priorité ${FOCUS_LABEL[s.focus].toLowerCase()}`), ` · ${passText} · ${s.builders + (s.goblinBuilder ? 1 : 0)} ouvriers · ${nf(s.medals)} médailles · ${sleepLabel(s.sleep)}`),
       h("button", { type: "button", class: "link", onClick: p.onStrategy }, "Changer"),
     ),
     h("div", { class: `tiles tiles-${tiles.length}` }, tiles),
@@ -218,6 +223,7 @@ function summaryTab(p: DashboardProps, f: Forecast): HTMLElement {
             ),
           )
         : h("p", { class: "muted" }, "Tout tourne. Reviens à la prochaine fin de chantier."),
+      h("button", { type: "button", class: "link", onClick: go("plan") }, "Voir le plan jour par jour"),
     ),
     h(
       "section",
@@ -238,6 +244,183 @@ function summaryTab(p: DashboardProps, f: Forecast): HTMLElement {
       ),
       h("button", { type: "button", class: "link", onClick: go("progress") }, "Voir la courbe"),
     ),
+  );
+}
+
+
+/* ---------- Plan ---------- */
+
+const POOL_LABEL: Record<Pool, string> = { builder: "Ouvrier", lab: "Labo", pet: "Animaux" };
+const POTION_LABEL: Record<Pool, string> = { builder: "d'ouvrier", lab: "de recherche", pet: "d'animaux" };
+const POTION_SPRITE: Record<Pool, string> = { builder: "builder_potion", lab: "research_potion", pet: "pet_potion" };
+
+function nameOf(r: ChainResult): string {
+  return r.chain.category === "heroes" ? heroLabel(r.chain) : displayName(r.chain.entry);
+}
+
+function purchaseText(s: Settings): string {
+  const parts: string[] = [];
+  if (s.potions.builder.purchases) parts.push(`${s.potions.builder.purchases} potion${s.potions.builder.purchases > 1 ? "s" : ""} d'ouvrier`);
+  if (s.heroHammers) parts.push(`${s.heroHammers} marteau${s.heroHammers > 1 ? "x" : ""} de héros`);
+  if (s.potions.research.purchases) parts.push(`${s.potions.research.purchases} potion${s.potions.research.purchases > 1 ? "s" : ""} de recherche`);
+  return parts.length ? parts.join(", ") : "rien";
+}
+
+function rulesCard(p: DashboardProps, f: Forecast): HTMLElement {
+  const s = p.settings;
+  const end = new Date(JAM.end);
+  const perDay = Math.max(0, ...f.heroes.plan.days.map((d) => d.starts.length));
+  const firstHour = f.heroes.plan.starts.length ? fmtHour(toDate(p.village.timestamp, f.heroes.plan.days.find((d) => d.starts.length && d.starts[0] > 0.01)?.starts[0] ?? f.heroes.plan.starts[0])) : null;
+  const rules: [string, string][] = [
+    [
+      "Aucun ouvrier vide",
+      `Relance dès qu'un chantier finit, labo et animaux compris. Le calendrier ci-dessous te dit quand revenir.${
+        s.sleep && f.heroes.idleAsleepHours >= 1
+          ? ` Avec ton sommeil, environ ${nf(f.heroes.idleAsleepHours)} h d'ouvrier attendent ton réveil.`
+          : ""
+      }`,
+    ],
+    [
+      "Potions quand tout tourne",
+      `Une potion n'accélère que les chantiers actifs.${perDay ? ` Bois jusqu'à ${perDay} potion${perDay > 1 ? "s" : ""} d'ouvrier par jour${firstHour ? `, dès ${firstHour}` : ""}.` : ""}`,
+    ],
+    ["Tes médailles", `Achète ${purchaseText(s)}, au fur et à mesure : ton stock ne dépasse jamais 5 de chaque.`],
+    ["Dernière vague", `Avant le ${fmtDayLong(end)} à ${fmtHour(end)}, lance un chantier long sur chaque ouvrier : la réduction de 50 % reste acquise même s'il finit après.`],
+  ];
+  return h(
+    "section",
+    { class: "card" },
+    h("h2", { class: "card-title" }, "4 règles pour optimiser"),
+    h("ol", { class: "rules" }, rules.map(([t, d]) => h("li", null, h("strong", null, t), h("span", { class: "muted" }, d)))),
+  );
+}
+
+function purchaseCard(p: DashboardProps): HTMLElement {
+  const s = p.settings;
+  const r = p.purchase;
+  const spent =
+    s.potions.builder.purchases * JAM.potions.builder.medalPrice +
+    s.potions.research.purchases * JAM.potions.research.medalPrice +
+    s.heroHammers * JAM.hammers.heroes.medalPrice;
+  const n = (count: number, one: string, many: string): [string, number] => [count > 1 ? many : one, count];
+  const items: [string, number][] = [
+    n(s.potions.builder.purchases, "potion d'ouvrier", "potions d'ouvrier"),
+    n(s.heroHammers, "marteau de héros", "marteaux de héros"),
+    n(s.potions.research.purchases, "potion de recherche", "potions de recherche"),
+  ];
+  return h(
+    "section",
+    { class: "card" },
+    h("div", { class: "card-head" }, h("h2", { class: "card-title" }, r ? "Achats recommandés" : "Tes achats"), h("span", { class: "muted" }, `${nf(spent)} / ${nf(s.medals)} médailles`)),
+    h(
+      "ul",
+      { class: "buy" },
+      items.filter(([, c]) => c > 0).map(([label, c]) => h("li", null, h("span", { class: "buy-num" }, String(c)), h("span", null, label))),
+    ),
+    r ? h("p", { class: "muted" }, r.reason) : h("p", { class: "hint" }, "Calcul automatique désactivé dans les réglages."),
+    spent > s.medals ? h("p", { class: "alert" }, "Ces achats dépassent tes médailles.") : null,
+    details("Comparer avec d'autres choix", false, () => comparison(p.village, p.settings)),
+  );
+}
+
+function eventRow(e: PlanEvent, exportUnix: number, T: number): HTMLElement {
+  const when = e.t < 1 / 60 ? "Maintenant" : fmtHour(toDate(exportUnix, e.t));
+  if (e.kind === "potion") {
+    return h(
+      "li",
+      { class: "ev ev-potion" },
+      h("span", { class: "ev-time" }, when),
+      h("img", { class: "sprite sprite-sm", src: `sprites/magic_items/${POTION_SPRITE[e.pool]}.webp`, alt: "" }),
+      h("div", { class: "ev-main" }, h("p", { class: "ev-text" }, `Bois ${e.count} potion${e.count > 1 ? "s" : ""} ${POTION_LABEL[e.pool]}`), e.buy ? h("p", { class: "hint" }, `Achète-en ${e.buy} juste avant`) : null),
+    );
+  }
+  const r = e.result;
+  return h(
+    "li",
+    { class: "ev" },
+    h("span", { class: "ev-time" }, when),
+    sprite(r.chain.category, r.chain.entry, r.chain.category === "buildings" || r.chain.category === "traps" ? e.seg.toLevel - 1 : undefined, "sm"),
+    h(
+      "div",
+      { class: "ev-main" },
+      h("p", { class: "ev-text" }, `Lance ${nameOf(r)} ${e.seg.toLevel - 1} → ${e.seg.toLevel}`),
+      h("p", { class: "hint" }, `${POOL_LABEL[e.pool]} · fini le ${fmtDateTime(toDate(exportUnix, e.seg.end))}${e.seg.end > T ? " (après le Jam)" : ""}`),
+    ),
+  );
+}
+
+function calendar(f: Forecast, exportUnix: number): HTMLElement {
+  const T = f.heroes.tHours;
+  const days = byDay(planEvents(f), exportUnix);
+  return h(
+    "div",
+    { class: "stack-sm" },
+    days.map(([day, events], i) => {
+      const launches = events.filter((e) => e.kind === "launch").length;
+      const title = `${fmtWeekday(new Date(`${day}T12:00:00Z`))} · ${launches} relance${launches > 1 ? "s" : ""}`;
+      return details(title, i === 0, () => h("ol", { class: "events" }, events.map((e) => eventRow(e, exportUnix, T))));
+    }),
+  );
+}
+
+function waveCard(p: DashboardProps, f: Forecast): HTMLElement {
+  const v = p.village;
+  const wave = finalWave(f);
+  const longest = longestRemaining(f, p.settings.pass);
+  const end = new Date(JAM.end);
+  return h(
+    "section",
+    { class: "card" },
+    h("h2", { class: "card-title" }, "Dernière vague"),
+    h("p", { class: "muted" }, `Tout chantier lancé avant le ${fmtDayLong(end)} à ${fmtHour(end)} garde sa réduction, même s'il finit après.`),
+    wave.length
+      ? h(
+          "ul",
+          { class: "brows" },
+          wave.map((w) =>
+            h(
+              "li",
+              { class: "brow" },
+              sprite(w.result.chain.category, w.result.chain.entry, undefined, "sm"),
+              h("div", { class: "brow-main" }, h("p", { class: "brow-name" }, `${nameOf(w.result)} ${w.seg.toLevel - 1} → ${w.seg.toLevel}`), h("p", { class: "hint" }, `Lancé le ${fmtDateTime(toDate(v.timestamp, w.seg.start))}`)),
+              h("span", { class: "pill" }, `−${fmtDays(w.savedHours)} j`),
+            ),
+          ),
+        )
+      : h("p", { class: "hint" }, "Aucun chantier ne déborde après la fin dans ce plan."),
+    longest.length
+      ? h(
+          "div",
+          { class: "maxed" },
+          h("p", { class: "hint" }, "Si un ouvrier se libère juste avant la fin, les chantiers les plus longs qui restent :"),
+          h(
+            "ul",
+            { class: "brows" },
+            longest.map((l) =>
+              h(
+                "li",
+                { class: "brow" },
+                sprite(l.result.chain.category, l.result.chain.entry, l.result.chain.category === "heroes" ? undefined : l.toLevel - 1, "sm"),
+                h("div", { class: "brow-main" }, h("p", { class: "brow-name" }, `${nameOf(l.result)} ${l.toLevel - 1} → ${l.toLevel}`), h("p", { class: "hint" }, `${fmtDays(l.baseHours)} j sans le Jam`)),
+                h("span", { class: "pill" }, `−${fmtDays(l.savedHours)} j`),
+              ),
+            ),
+          ),
+        )
+      : null,
+  );
+}
+
+function planTab(p: DashboardProps, f: Forecast): HTMLElement {
+  return h(
+    "section",
+    { class: "stack" },
+    sectionHead("Ton plan jour par jour", "Heure de Paris. Reviens à ces heures pour relancer.", estimate()),
+    rulesCard(p, f),
+    purchaseCard(p),
+    h("h2", { class: "section-title" }, "Calendrier des relances"),
+    calendar(f, p.village.timestamp),
+    waveCard(p, f),
   );
 }
 
@@ -452,7 +635,6 @@ function moreTab(p: DashboardProps, f: Forecast): HTMLElement {
     { class: "stack" },
     sectionHead("Plus"),
     details("Planning des potions", true, () => potionPlanView(f, v.timestamp)),
-    details("Comparer Pass d'or et médailles", false, () => comparison(v, p.settings)),
     details("Contrôle de l'export", v.report.unknown.length > 0, () => exportCheck(v)),
     details("À propos", false, about),
     h("button", { type: "button", class: "btn btn-ghost", onClick: p.onNewExport }, "Coller un nouvel export"),
@@ -465,6 +647,7 @@ export function dashboardView(p: DashboardProps): HTMLElement {
   const T = hoursBetween(v.timestamp, JAM.end);
   const body =
     T <= 0 ? summaryTab(p, f)
+    : p.tab === "plan" ? planTab(p, f)
     : p.tab === "heroes" ? heroesTab(p, f)
     : p.tab === "buildings" ? buildingsTab(p, f)
     : p.tab === "lab" ? labTab(p, f)
