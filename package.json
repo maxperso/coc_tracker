@@ -1,0 +1,25 @@
+{
+  "name": "coc-tracker",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "sync-data": "node scripts/sync-clashking.mjs ClashKingAssets",
+    "check-export": "vite-node scripts/check-export.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.5",
+    "vite-node": "^6.0.0",
+    "vitest": "^5.0.5"
+  },
+  "dependencies": {
+    "@fontsource/inter": "^5.3.0",
+    "zod": "^4.6.7"
+  }
+}

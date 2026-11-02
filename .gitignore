@@ -1,0 +1,9 @@
+node_modules/
+dist/
+# Clone de ClashKingAssets : les fichiers utiles sont copiés par `npm run sync-data`.
+ClashKingAssets/
+# Exports réels de village : ne jamais les commiter.
+exports/
+*.export.json
+village-export*.json
+my_village.json

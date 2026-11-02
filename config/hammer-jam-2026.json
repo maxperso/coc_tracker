@@ -1,0 +1,33 @@
+{
+  "start": "2026-11-01T08:00:00Z",
+  "end": "2026-11-16T08:00:00Z",
+  "timeReduction": 0.5,
+  "costReduction": 0.5,
+  "excluded": ["supercharges", "crafted_defenses"],
+  "homeVillageOnly": true,
+  "collectors": { "production": 2, "capacity": 2 },
+
+  "goldPassStacking": "multiplicative",
+  "goldPassAppliesToCost": true,
+  "rounding": "none",
+
+  "potions": {
+    "maxStock": 5,
+    "builder": { "extraHours": 9, "medalPrice": 30 },
+    "research": { "extraHours": 23, "medalPrice": 20 },
+    "pet": { "extraHours": 23, "medalPrice": null }
+  },
+  "hammers": {
+    "heroes": { "medalPrice": 165, "cooldownDays": 7 },
+    "building": { "medalPrice": 120 },
+    "fighting": { "medalPrice": 120 },
+    "spells": { "medalPrice": 120 }
+  },
+  "medalCap": 2500,
+
+  "_notes": {
+    "goldPassStacking": "multiplicative : base × (1 − Jam) × (1 − Pass). Vient d'un guide communautaire (60 % à 20 %), non documenté par Supercell.",
+    "rounding": "none : aucune règle d'arrondi connue. À comparer aux minuteurs du jeu.",
+    "medalPrices": "Prix en médailles à vérifier en jeu."
+  }
+}
