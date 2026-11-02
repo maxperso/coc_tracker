@@ -41,7 +41,7 @@ export function landingView(a: {
     [potion("builder_potion"), "Un plan jour par jour", "Quoi relancer, à quelle heure, et quand boire tes potions. Rien ne reste à l'arrêt, même la nuit."],
     [icon("heroes", "Barbarian King"), "Héros et bâtiments", "Le calendrier de chaque héros, les niveaux atteints à la fin du Jam et les ressources à prévoir."],
     [potion("research_potion"), "Tes médailles bien dépensées", "Combien de potions d'ouvrier, de recherche ou de marteaux acheter selon ta stratégie."],
-    [icon("buildings", "Town Hall"), "Le classement entre amis", "Compare ton avancement à celui de tes amis et regarde leur plan."],
+    [icon("buildings", "Town Hall"), "Le classement entre amis", "Compare ton avancement à celui de tes amis, regarde leur plan et propose tes idées."],
   ];
   const steps: [string, string][] = [
     ["Crée ton compte", "Un pseudo, un email confirmé, et le code d'invitation de ton groupe."],
@@ -75,7 +75,7 @@ export function landingView(a: {
                 "div",
                 { class: "button-row" },
                 h("button", { type: "button", class: "btn btn-primary btn-lg", onClick: a.onDashboard }, "Ouvrir mon dashboard"),
-                h("button", { type: "button", class: "btn btn-ghost btn-lg", onClick: a.onFriends }, "Voir mes amis"),
+                h("button", { type: "button", class: "btn btn-ghost btn-lg", onClick: a.onFriends }, "Voir la commu"),
                 h("button", { type: "button", class: "btn btn-ghost btn-lg", onClick: a.onLogout }, "Se déconnecter"),
               ),
             )

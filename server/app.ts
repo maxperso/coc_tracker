@@ -5,6 +5,15 @@ import Fastify, { type FastifyError, type FastifyReply, type FastifyRequest } fr
 import { existsSync } from "node:fs";
 import { z } from "zod";
 import type { AuthConfigResponse, MeResponse, PendingResponse, PlayerProfile, PlayerRow } from "../src/lib/api";
+import {
+  BACKLOG_BODY_MAX,
+  BACKLOG_DAILY_MAX,
+  BACKLOG_KINDS,
+  BACKLOG_TITLE_MAX,
+  type BacklogItem,
+  type BacklogKind,
+  type BacklogStatus,
+} from "../src/lib/backlog";
 import { MAX_EXPORT_CHARS } from "../src/lib/exportParse";
 import { parseSettings, SettingsSchema } from "../src/lib/settingsSchema";
 import { summarize, villageFromText } from "../src/lib/summary";
@@ -50,6 +59,46 @@ const Subscription = z.object({
   keys: z.object({ p256dh: z.string().min(10).max(200), auth: z.string().min(8).max(100) }),
 });
 const Unsubscribe = z.object({ endpoint: z.string().max(2000) });
+const BacklogNew = z.object({
+  kind: z.enum(BACKLOG_KINDS),
+  title: z.string().trim().min(3, "Donne un titre (3 caractères au moins).").max(BACKLOG_TITLE_MAX, `Titre trop long (${BACKLOG_TITLE_MAX} caractères au plus).`),
+  body: z.string().trim().max(BACKLOG_BODY_MAX, `Description trop longue (${BACKLOG_BODY_MAX} caractères au plus).`).default(""),
+});
+const BacklogVote = z.object({ vote: z.boolean() });
+const BacklogId = z.object({ id: z.coerce.number().int().positive().max(Number.MAX_SAFE_INTEGER) });
+
+interface BacklogRow {
+  id: string;
+  kind: BacklogKind;
+  title: string;
+  body: string;
+  status: BacklogStatus;
+  created_at: Date;
+  author: string;
+  votes: number;
+  voted: boolean;
+  mine: boolean;
+}
+
+/** Une proposition vue par le joueur `$1` : nombre de votes, son vote, s'il en est l'auteur. */
+const BACKLOG_SELECT = `
+  select b.id, b.kind, b.title, b.body, b.status, b.created_at, u.username as author, b.user_id = $1 as mine,
+    (select count(*)::int from backlog_votes v where v.item_id = b.id) as votes,
+    exists (select 1 from backlog_votes v where v.item_id = b.id and v.user_id = $1) as voted
+  from backlog_items b join users u on u.id = b.user_id`;
+
+const backlogItem = (r: BacklogRow): BacklogItem => ({
+  id: Number(r.id),
+  kind: r.kind,
+  title: r.title,
+  body: r.body,
+  status: r.status,
+  author: r.author,
+  createdAt: r.created_at.toISOString(),
+  votes: r.votes,
+  voted: r.voted,
+  mine: r.mine,
+});
 
 const CSP = [
   "default-src 'none'",
@@ -373,6 +422,58 @@ export async function buildApp(cfg: Config, db: Db, mailer: Mailer, push: PushSe
       exports: rows.map((r) => ({ raw: r.raw, exportedAt: r.exported_at.toISOString() })),
       checks: u.plan_checks ?? null,
     } satisfies PlayerProfile;
+  });
+
+  /* ---------- Backlog ---------- */
+
+  app.get("/api/backlog", { preHandler: requireUser }, async (req) => {
+    const { rows } = await db.query<BacklogRow>(`${BACKLOG_SELECT} order by b.created_at desc limit 500`, [req.user!.id]);
+    return rows.map(backlogItem);
+  });
+
+  app.post("/api/backlog", { preHandler: requireUser, config: { rateLimit: { max: 5, timeWindow: "1 minute" } } }, async (req, reply) => {
+    const body = BacklogNew.safeParse(req.body);
+    if (!body.success) return bad(reply, body.error);
+    const userId = req.user!.id;
+    const { rows: recent } = await db.query<{ n: number }>(
+      "select count(*)::int as n from backlog_items where user_id = $1 and created_at > now() - interval '1 day'",
+      [userId],
+    );
+    if (recent[0].n >= BACKLOG_DAILY_MAX) return reply.code(429).send({ error: `${BACKLOG_DAILY_MAX} propositions par jour au plus. Reviens demain.` });
+    const { rows } = await db.query<{ id: string }>(
+      "insert into backlog_items (user_id, kind, title, body) values ($1, $2, $3, $4) returning id",
+      [userId, body.data.kind, body.data.title, body.data.body],
+    );
+    // L'auteur soutient sa propre proposition.
+    await db.query("insert into backlog_votes (item_id, user_id) values ($1, $2)", [rows[0].id, userId]);
+    const { rows: item } = await db.query<BacklogRow>(`${BACKLOG_SELECT} where b.id = $2`, [userId, rows[0].id]);
+    return reply.code(201).send(backlogItem(item[0]));
+  });
+
+  app.put<{ Params: { id: string } }>("/api/backlog/:id/vote", { preHandler: requireUser, config: { rateLimit: { max: 60, timeWindow: "1 minute" } } }, async (req, reply) => {
+    const params = BacklogId.safeParse(req.params);
+    const body = BacklogVote.safeParse(req.body);
+    if (!params.success) return bad(reply, params.error);
+    if (!body.success) return bad(reply, body.error);
+    const userId = req.user!.id;
+    const { rowCount } = await db.query("select 1 from backlog_items where id = $1", [params.data.id]);
+    if (!rowCount) return reply.code(404).send({ error: "Proposition introuvable." });
+    if (body.data.vote) {
+      await db.query("insert into backlog_votes (item_id, user_id) values ($1, $2) on conflict do nothing", [params.data.id, userId]);
+    } else {
+      await db.query("delete from backlog_votes where item_id = $1 and user_id = $2", [params.data.id, userId]);
+    }
+    const { rows } = await db.query<BacklogRow>(`${BACKLOG_SELECT} where b.id = $2`, [userId, params.data.id]);
+    return backlogItem(rows[0]);
+  });
+
+  app.delete<{ Params: { id: string } }>("/api/backlog/:id", { preHandler: requireUser }, async (req, reply) => {
+    const params = BacklogId.safeParse(req.params);
+    if (!params.success) return bad(reply, params.error);
+    // Seul l'auteur supprime sa proposition.
+    const { rowCount } = await db.query("delete from backlog_items where id = $1 and user_id = $2", [params.data.id, req.user!.id]);
+    if (!rowCount) return reply.code(404).send({ error: "Proposition introuvable." });
+    return { ok: true };
   });
 
   /* ---------- Plan coché ---------- */

@@ -1,3 +1,4 @@
+import type { BacklogItem, BacklogKind } from "./backlog";
 import type { AuthConfigResponse, MeResponse, PendingResponse, PlanChecks, PlayerProfile, PlayerRow, PushConfigResponse } from "./api";
 import type { Settings } from "./plan";
 
@@ -51,4 +52,8 @@ export const api = {
   pushSubscribe: (sub: { endpoint: string; keys: { p256dh: string; auth: string } }) => call<{ ok: true }>("POST", "/api/push/subscribe", sub),
   pushUnsubscribe: (endpoint: string) => call<{ ok: true }>("POST", "/api/push/unsubscribe", { endpoint }),
   pushTest: () => call<{ sent: number }>("POST", "/api/push/test", {}),
+  backlog: () => call<BacklogItem[]>("GET", "/api/backlog"),
+  addBacklog: (d: { kind: BacklogKind; title: string; body: string }) => call<BacklogItem>("POST", "/api/backlog", d),
+  voteBacklog: (id: number, vote: boolean) => call<BacklogItem>("PUT", `/api/backlog/${id}/vote`, { vote }),
+  deleteBacklog: (id: number) => call<{ ok: true }>("DELETE", `/api/backlog/${id}`),
 };

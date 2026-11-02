@@ -3113,3 +3113,246 @@ select.input {
     transition: none;
   }
 }
+
+/* ---------- Commu : amis et backlog ---------- */
+.commu-grid {
+  display: grid;
+  gap: 32px;
+  align-items: start;
+}
+
+.commu-grid > * {
+  min-width: 0;
+}
+
+@media (min-width: 1024px) {
+  .commu-grid {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr);
+  }
+}
+
+.backlog-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.backlog-form .seg-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.textarea {
+  min-height: 88px;
+  padding: 10px 12px;
+  line-height: 1.45;
+  resize: vertical;
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 36px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg);
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.875rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.18s ease, color 0.18s ease, border-color 0.18s ease;
+}
+
+.chip:hover {
+  color: var(--text);
+}
+
+.chip.active {
+  background: var(--done-tint);
+  border-color: var(--done);
+  color: var(--text);
+}
+
+.chip-count {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.chip:focus-visible,
+.bl-vote:focus-visible,
+.bl-delete:focus-visible {
+  outline: 2px solid var(--text);
+  outline-offset: 2px;
+}
+
+.bl-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.bl-item {
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr);
+  gap: 14px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+}
+
+.bl-done,
+.bl-declined {
+  opacity: 0.7;
+}
+
+.bl-vote {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  align-self: start;
+  width: 52px;
+  min-height: 56px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--soft);
+  color: var(--muted);
+  font: inherit;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  transition: background-color 0.18s ease, color 0.18s ease, border-color 0.18s ease, transform 0.12s ease;
+}
+
+.bl-vote:hover {
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+
+.bl-vote:active {
+  transform: scale(0.95);
+}
+
+.bl-vote.voted {
+  background: var(--done-tint);
+  border-color: var(--done);
+  color: var(--done-strong);
+}
+
+.bl-main {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.bl-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.bl-kind,
+.bl-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 650;
+}
+
+.bl-kind {
+  background: var(--soft);
+  color: var(--muted);
+}
+
+.bl-kind-bug {
+  background: transparent;
+  border: 1px solid var(--danger);
+  color: var(--danger-text);
+}
+
+.bl-kind-feature {
+  background: var(--done-tint);
+  color: var(--done-strong);
+}
+
+.bl-status-planned {
+  background: var(--friend-tint);
+  color: var(--text);
+  border: 1px solid var(--friend-tint-border);
+}
+
+.bl-status-done {
+  background: var(--done);
+  color: var(--pill-text);
+}
+
+.bl-status-declined {
+  background: var(--soft);
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+.bl-title {
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+
+.bl-body {
+  color: var(--muted);
+  font-size: 0.9375rem;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+
+.bl-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+}
+
+.bl-delete {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 32px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.8125rem;
+  cursor: pointer;
+}
+
+.bl-delete:hover {
+  color: var(--danger-text);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bl-vote,
+  .chip {
+    transition: none;
+  }
+
+}

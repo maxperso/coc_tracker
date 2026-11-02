@@ -108,7 +108,7 @@ export function homeView(opts: {
       "div",
       { class: "button-row center-row" },
       opts.onCancel ? h("button", { type: "button", class: "btn btn-ghost", onClick: opts.onCancel }, "Retour à mon plan") : null,
-      h("button", { type: "button", class: "btn btn-ghost", onClick: opts.onPlayers }, "Voir mes amis"),
+      h("button", { type: "button", class: "btn btn-ghost", onClick: opts.onPlayers }, "Voir la commu"),
       h("button", { type: "button", class: "btn btn-ghost", onClick: opts.onLogout }, "Se déconnecter"),
     ),
   );

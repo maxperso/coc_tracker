@@ -5,6 +5,7 @@ import "@fontsource/inter/latin-700.css";
 import "./styles.css";
 
 import type { PlayerProfile, PlayerRow } from "./lib/api";
+import type { BacklogItem } from "./lib/backlog";
 import { api, ApiError } from "./lib/client";
 import { parseExport } from "./lib/exportParse";
 import { gameIndex } from "./lib/gamedata";
@@ -16,7 +17,8 @@ import { canInstall, disablePush, enablePush, install, isIos, isStandalone, onPw
 import { applyTheme, loadTheme, saveTheme, type ThemePref } from "./lib/theme";
 import { buildVillage, type Village } from "./lib/village";
 import { authView, type AuthMode, type AuthState } from "./ui/auth";
-import { dashboardView, tabsFor, themeControl, type Tab } from "./ui/dashboard";
+import { backlogView, resetBacklogDraft, type BacklogActions, type BacklogState } from "./ui/backlog";
+import { communityView, dashboardView, tabsFor, themeControl, type Tab } from "./ui/dashboard";
 import { h } from "./ui/dom";
 import { homeView } from "./ui/home";
 import { landingView } from "./ui/landing";
@@ -48,6 +50,7 @@ const state: {
   newExport: boolean;
   tab: Tab;
   players: { rows: PlayerRow[] | null; error?: string };
+  backlog: BacklogState;
   friend: (Loaded & { username: string; settings: Settings; demo?: boolean }) | null;
   friendTab: Tab;
 } = {
@@ -60,6 +63,7 @@ const state: {
   newExport: false,
   tab: "summary",
   players: { rows: null },
+  backlog: { rows: null },
   friend: null,
   friendTab: "summary",
 };
@@ -305,6 +309,60 @@ async function loadPlayers() {
   render();
 }
 
+/* ---------- Backlog ---------- */
+
+async function loadBacklog() {
+  try {
+    state.backlog = { ...state.backlog, rows: await api.backlog(), error: undefined };
+  } catch (e) {
+    state.backlog = { ...state.backlog, error: handleError(e) };
+  }
+  render();
+}
+
+/** Remplace une proposition dans la liste (réponse du serveur ou vote affiché tout de suite). */
+function putBacklogItem(it: BacklogItem) {
+  state.backlog = { ...state.backlog, rows: (state.backlog.rows ?? []).map((x) => (x.id === it.id ? it : x)) };
+}
+
+const backlogActions: BacklogActions = {
+  onAdd: async (d) => {
+    state.backlog = { ...state.backlog, busy: true, formError: undefined };
+    render();
+    try {
+      const it = await api.addBacklog(d);
+      resetBacklogDraft();
+      state.backlog = { ...state.backlog, busy: false, rows: [it, ...(state.backlog.rows ?? [])] };
+    } catch (e) {
+      state.backlog = { ...state.backlog, busy: false, formError: handleError(e) };
+    }
+    render();
+  },
+  onVote: async (id, vote) => {
+    const before = state.backlog.rows?.find((x) => x.id === id);
+    if (!before) return;
+    // Affiché tout de suite, corrigé par la réponse du serveur.
+    putBacklogItem({ ...before, voted: vote, votes: before.votes + (vote ? 1 : -1) });
+    render();
+    try {
+      putBacklogItem(await api.voteBacklog(id, vote));
+    } catch (e) {
+      putBacklogItem(before);
+      state.backlog = { ...state.backlog, formError: handleError(e) };
+    }
+    render();
+  },
+  onDelete: async (id) => {
+    try {
+      await api.deleteBacklog(id);
+      state.backlog = { ...state.backlog, rows: (state.backlog.rows ?? []).filter((x) => x.id !== id) };
+    } catch (e) {
+      state.backlog = { ...state.backlog, formError: handleError(e) };
+    }
+    render();
+  },
+};
+
 async function openPlayer(username: string) {
   if (username.toLowerCase() === state.me?.toLowerCase()) {
     state.view = state.mine ? "dash" : "home";
@@ -340,7 +398,10 @@ async function logout(everywhere = false) {
 
 function goTab(t: Tab) {
   state.tab = t;
-  if (t === "players") void loadPlayers();
+  if (t === "players") {
+    void loadPlayers();
+    void loadBacklog();
+  }
   render();
   window.scrollTo(0, 0);
 }
@@ -353,10 +414,10 @@ function playersPage(): HTMLElement {
     h(
       "div",
       { class: "section-head" },
-      h("div", null, h("h1", { class: "title" }, "Amis"), h("p", { class: "lead" }, "Classés par avancement du village.")),
+      h("div", null, h("h1", { class: "title" }, "Commu"), h("p", { class: "lead" }, "Le classement de tes amis, et les idées pour améliorer COC Tracker.")),
       h("button", { type: "button", class: "btn btn-ghost", onClick: () => ((state.view = "home"), render()) }, "Coller mon export"),
     ),
-    playersView({ ...state.players, me: state.me!, onOpen: (u) => void openPlayer(u) }),
+    communityView(playersView({ ...state.players, me: state.me!, onOpen: (u) => void openPlayer(u) }), backlogView(state.backlog, backlogActions, render)),
   );
 }
 
@@ -426,6 +487,7 @@ function renderView(): void {
             } else {
               state.view = "players";
               void loadPlayers();
+              void loadBacklog();
             }
           },
           onLogout: () => void logout(),
@@ -446,6 +508,7 @@ function renderView(): void {
           onPlayers: () => {
             state.view = "players";
             void loadPlayers();
+            void loadBacklog();
           },
           onCancel: state.mine ? () => ((state.view = "dash"), render()) : undefined,
           onLogout: () => void logout(),
@@ -505,6 +568,8 @@ function renderView(): void {
     owner,
     demo: friend?.demo,
     players: state.players,
+    backlog: state.backlog,
+    backlogActions,
     tab,
     onTab: (t) => {
       if (friend) {

@@ -74,6 +74,26 @@ const MIGRATIONS: string[] = [
   );
   create index push_queue_due on push_queue (send_at) where sent_at is null;
   `,
+  // 4 : backlog de la communauté (idées, bugs, modifications) et votes.
+  `
+  create table backlog_items (
+    id bigserial primary key,
+    user_id bigint not null references users(id) on delete cascade,
+    kind text not null check (kind in ('feature', 'bug', 'change')),
+    title text not null,
+    body text not null default '',
+    status text not null default 'open' check (status in ('open', 'planned', 'done', 'declined')),
+    created_at timestamptz not null default now()
+  );
+  create index backlog_items_created on backlog_items (created_at desc);
+  create index backlog_items_user on backlog_items (user_id, created_at desc);
+
+  create table backlog_votes (
+    item_id bigint not null references backlog_items(id) on delete cascade,
+    user_id bigint not null references users(id) on delete cascade,
+    primary key (item_id, user_id)
+  );
+  `,
 ];
 
 export async function migrate(db: Db): Promise<number> {

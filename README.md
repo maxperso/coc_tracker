@@ -90,6 +90,11 @@ les rappels dans *Mon compte* (sur iPhone, après avoir installé le site sur l'
 ```bash
 docker compose exec app node dist-server/cli.js list-users
 docker compose exec -it app node dist-server/cli.js reset-password <pseudo>   # coupe aussi ses sessions
+
+# Backlog de la page Commu : lister, changer le statut, supprimer (modération)
+docker compose exec app node dist-server/cli.js backlog
+docker compose exec app node dist-server/cli.js backlog-status <id> planned    # open | planned | done | declined
+docker compose exec app node dist-server/cli.js backlog-delete <id>
 ```
 
 Sauvegarde : `docker compose exec db pg_dump -U coc coc > sauvegarde.sql`

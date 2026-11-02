@@ -325,4 +325,80 @@ describe.skipIf(!url)("API", () => {
       expect(rows[0].n).toBe(0);
     });
   });
+
+  describe("ordre perso et LDC enregistrés", () => {
+    it("garde la stratégie Perso, l'ordre, les pauses et la LDC", async () => {
+      const alice = cookieOf(await post("/api/auth/login", { username: "alice", password: "motdepasse1" }));
+      const settings = {
+        ...DEFAULT_SETTINGS,
+        focus: "custom",
+        order: { builder: ["buildings:1000008", "heroes:28000000"], lab: ["spells:26000000"], pet: [], off: ["heroes:28000003"] },
+        cwl: { enabled: true, firstDay: "2026-11-03", days: 7, hour: 20, heroes: ["heroes:28000000"] },
+      };
+      expect((await req({ method: "PUT", url: "/api/me/settings", cookie: alice, payload: settings })).statusCode).toBe(200);
+      expect((await req({ url: "/api/me/settings", cookie: alice })).json()).toEqual(settings);
+      const tooLong = { ...settings, order: { ...settings.order, off: ["x".repeat(41)] } };
+      expect((await req({ method: "PUT", url: "/api/me/settings", cookie: alice, payload: tooLong })).statusCode).toBe(400);
+    });
+  });
+
+  describe("backlog", () => {
+    let alice: string;
+    let dave: string;
+    beforeAll(async () => {
+      alice = cookieOf(await post("/api/auth/login", { username: "alice", password: "motdepasse1" }));
+      dave = await signup("dave", "dave@example.test");
+    });
+    const put = (url: string, payload: unknown, cookie: string) => req({ method: "PUT", url, payload: payload as object, cookie });
+    const del = (url: string, cookie: string) => req({ method: "DELETE", url, cookie });
+
+    it("demande d'être connecté", async () => {
+      expect((await req({ url: "/api/backlog" })).statusCode).toBe(401);
+      expect((await post("/api/backlog", { kind: "bug", title: "Titre" })).statusCode).toBe(401);
+    });
+
+    it("valide les propositions", async () => {
+      expect((await post("/api/backlog", { kind: "spam", title: "Titre ok" }, alice)).statusCode).toBe(400);
+      expect((await post("/api/backlog", { kind: "bug", title: "  a " }, alice)).statusCode).toBe(400);
+      expect((await post("/api/backlog", { kind: "bug", title: "x".repeat(121) }, alice)).statusCode).toBe(400);
+      expect((await post("/api/backlog", { kind: "bug", title: "Titre", body: "x".repeat(2001) }, alice)).statusCode).toBe(400);
+    });
+
+    it("publie, compte le vote de l'auteur, et chacun peut voter une fois", async () => {
+      const created = await post("/api/backlog", { kind: "feature", title: "  Coût total par jour  ", body: "Dans le plan" }, alice);
+      expect(created.statusCode).toBe(201);
+      const item = created.json();
+      expect(item).toMatchObject({ kind: "feature", title: "Coût total par jour", status: "open", author: "Alice", votes: 1, voted: true, mine: true });
+
+      const seenByDave = (await req({ url: "/api/backlog", cookie: dave })).json().find((x: { id: number }) => x.id === item.id);
+      expect(seenByDave).toMatchObject({ votes: 1, voted: false, mine: false });
+      for (let i = 0; i < 2; i++) expect((await put(`/api/backlog/${item.id}/vote`, { vote: true }, dave)).json()).toMatchObject({ votes: 2, voted: true });
+      expect((await put(`/api/backlog/${item.id}/vote`, { vote: false }, dave)).json()).toMatchObject({ votes: 1, voted: false });
+      expect((await put("/api/backlog/999999/vote", { vote: true }, dave)).statusCode).toBe(404);
+      expect((await put("/api/backlog/abc/vote", { vote: true }, dave)).statusCode).toBe(400);
+    });
+
+    it("seul l'auteur supprime sa proposition", async () => {
+      const item = (await post("/api/backlog", { kind: "bug", title: "Le calendrier dépasse" }, dave)).json();
+      expect((await del(`/api/backlog/${item.id}`, alice)).statusCode).toBe(404);
+      expect((await del(`/api/backlog/${item.id}`, dave)).statusCode).toBe(200);
+      expect((await req({ url: "/api/backlog", cookie: dave })).json().some((x: { id: number }) => x.id === item.id)).toBe(false);
+    });
+
+    it("refuse une écriture venue d'un autre site", async () => {
+      const res = await req({ method: "POST", url: "/api/backlog", cookie: alice, payload: { kind: "bug", title: "Depuis ailleurs" }, headers: { origin: "https://evil.example" } });
+      expect(res.statusCode).toBe(403);
+    });
+
+    it("limite le nombre de propositions par jour", async () => {
+      const { rows } = await db.query<{ id: string }>("select id from users where lower(username) = 'dave'");
+      await db.query(
+        "insert into backlog_items (user_id, kind, title) select $1, 'change', 'Idée ' || g from generate_series(1, 20) g",
+        [rows[0].id],
+      );
+      const res = await post("/api/backlog", { kind: "change", title: "Encore une" }, dave);
+      expect(res.statusCode).toBe(429);
+      expect(res.json().error).toContain("par jour");
+    });
+  });
 });

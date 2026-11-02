@@ -21,6 +21,7 @@ import { about, comparison, details, exportCheck, historyView, potionPlanView } 
 import { sleepLabel } from "./sleep";
 import { playersView } from "./players";
 import { icon, type IconName } from "./icons";
+import { backlogView, type BacklogActions, type BacklogState } from "./backlog";
 import { orderEditor } from "./order";
 import { sprite } from "./sprite";
 
@@ -33,7 +34,7 @@ const NAV: { key: NavKey; label: string; icon: IconName }[] = [
   { key: "plan", label: "Plan", icon: "plan" },
   { key: "village", label: "Village", icon: "village" },
   { key: "progress", label: "Progression", icon: "progress" },
-  { key: "players", label: "Amis", icon: "friends" },
+  { key: "players", label: "Commu", icon: "friends" },
   { key: "compare", label: "Comparer", icon: "compare" },
 ];
 const VILLAGE_TABS: Tab[] = ["heroes", "buildings", "lab"];
@@ -43,7 +44,7 @@ const navOf = (t: Tab): NavKey | null =>
 /** Sous-onglet « Village » par défaut : celui de la stratégie. */
 const villageDefault = (s: Settings): Tab => (s.focus === "buildings" ? "buildings" : "heroes");
 
-/** Onglets : le profil d'un ami est en lecture seule, sans « Amis » ni « Plus ». */
+/** Onglets : le profil d'un ami est en lecture seule, sans « Commu » ni « Plus ». */
 export function tabsFor(s: Settings, readOnly = false): Tab[] {
   const tabs: Tab[] = s.focus === "buildings"
     ? ["summary", "plan", "order", "buildings", "heroes", "lab", "progress", "players", "more"]
@@ -62,6 +63,8 @@ export interface DashboardProps {
   /** Propriétaire du village affiché ; différent de `me` pour le profil d'un ami (lecture seule). */
   owner: string;
   players: { rows: PlayerRow[] | null; error?: string };
+  backlog: BacklogState;
+  backlogActions: BacklogActions;
   tab: Tab;
   onTab: (t: Tab) => void;
   onStrategy: () => void;
@@ -187,7 +190,7 @@ function appHeader(p: DashboardProps): HTMLElement {
         ? h(
             "div",
             { class: "appbar-actions" },
-            p.demo ? null : h("button", { type: "button", class: "btn btn-ghost", onClick: p.onBack }, "Amis"),
+            p.demo ? null : h("button", { type: "button", class: "btn btn-ghost", onClick: p.onBack }, "Commu"),
           )
         : h(
             "div",
@@ -1358,14 +1361,29 @@ function compareTab(p: DashboardProps, f: Forecast): HTMLElement {
   );
 }
 
-/* ---------- Amis ---------- */
+/* ---------- Commu : amis et backlog ---------- */
 
 function playersTab(p: DashboardProps): HTMLElement {
   return h(
     "section",
     { class: "stack" },
-    sectionHead("Amis", "Classés par avancement du village. Touche un joueur pour voir son plan."),
-    playersView({ ...p.players, me: p.me, onOpen: p.onOpenPlayer }),
+    sectionHead("Commu", "Le classement de tes amis, et les idées pour améliorer COC Tracker."),
+    communityView(playersView({ ...p.players, me: p.me, onOpen: p.onOpenPlayer }), backlogView(p.backlog, p.backlogActions, () => p.onTab("players"))),
+  );
+}
+
+/** Amis à gauche, backlog à droite ; l'un sous l'autre sur téléphone. */
+export function communityView(players: HTMLElement, backlog: HTMLElement): HTMLElement {
+  return h(
+    "div",
+    { class: "commu-grid" },
+    h(
+      "section",
+      { class: "stack", "aria-labelledby": "friends-title" },
+      h("div", null, h("h2", { id: "friends-title", class: "section-title" }, "Amis"), h("p", { class: "muted" }, "Classés par avancement du village. Touche un joueur pour voir son plan.")),
+      players,
+    ),
+    backlog,
   );
 }
 
