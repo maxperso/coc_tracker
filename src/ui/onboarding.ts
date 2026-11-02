@@ -27,6 +27,12 @@ const CHOICES: { focus: Focus; title: string; text: string; icons: [string, stri
     text: "Chaque héros garde un ouvrier. Les ouvriers libres passent aux bâtiments.",
     icons: [["heroes", "Barbarian King"], ["buildings", "Cannon"]],
   },
+  {
+    focus: "custom",
+    title: "Perso",
+    text: "Tu classes tout toi-même, de A à Z : héros, bâtiments, labo, animaux. Tu pars de l'ordre hybride.",
+    icons: [["heroes", "Barbarian King"], ["buildings", "Laboratory"]],
+  },
 ];
 
 /** Sprite dans un cadre de taille fixe : héros et bâtiments ont le même encombrement. */

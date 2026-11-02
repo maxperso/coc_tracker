@@ -15,6 +15,10 @@ const PATHS = {
   paste: ["M9 4h6v3H9z", "M8 5.5H6a1 1 0 0 0-1 1V20a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V6.5a1 1 0 0 0-1-1h-2", "M9 13h6", "M9 16.5h4"],
   arrowLeft: ["M19 12H5", "M11 6l-6 6 6 6"],
   arrowRight: ["M5 12h14", "M13 6l6 6-6 6"],
+  chevronUp: ["M6 15l6-6 6 6"],
+  chevronDown: ["M6 9l6 6 6-6"],
+  grip: ["M5 9h14", "M5 15h14"],
+  order: ["M4 6h10", "M4 12h7", "M4 18h4", "M17 5v14", "M14 16l3 3 3-3"],
 } as const;
 
 export type IconName = keyof typeof PATHS;

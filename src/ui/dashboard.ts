@@ -3,7 +3,7 @@ import { displayName, findByName, gameIndex, maxLevel, type Entry } from "../lib
 import type { PlayerRow } from "../lib/api";
 import type { Snapshot } from "../lib/history";
 import { overlaps } from "../lib/cwl";
-import { builderForecast, FOCUS_LABEL, forecast, heroLabel, wallSummary, type Focus, type Forecast, type PoolForecast, type Settings } from "../lib/plan";
+import { builderForecast, FOCUS_LABEL, forecast, heroLabel, wallSummary, type Focus, type Forecast, type PoolForecast, type Settings, type UpgradeOrder } from "../lib/plan";
 import { globalPct, pct, progress, progressCurve } from "../lib/progress";
 import type { Purchase } from "../lib/recommend";
 import { JAM } from "../lib/rules";
@@ -21,9 +21,10 @@ import { about, comparison, details, exportCheck, historyView, potionPlanView } 
 import { sleepLabel } from "./sleep";
 import { playersView } from "./players";
 import { icon, type IconName } from "./icons";
+import { orderEditor } from "./order";
 import { sprite } from "./sprite";
 
-export type Tab = "summary" | "plan" | "heroes" | "buildings" | "lab" | "progress" | "players" | "compare" | "more";
+export type Tab = "summary" | "plan" | "order" | "heroes" | "buildings" | "lab" | "progress" | "players" | "compare" | "more";
 
 /** Navigation principale : 5 entrées. Héros, bâtiments et labo sont regroupés sous « Village ». */
 type NavKey = "summary" | "plan" | "village" | "progress" | "players" | "compare";
@@ -36,7 +37,8 @@ const NAV: { key: NavKey; label: string; icon: IconName }[] = [
   { key: "compare", label: "Comparer", icon: "compare" },
 ];
 const VILLAGE_TABS: Tab[] = ["heroes", "buildings", "lab"];
-const navOf = (t: Tab): NavKey | null => (VILLAGE_TABS.includes(t) ? "village" : t === "more" ? null : (t as NavKey));
+const navOf = (t: Tab): NavKey | null =>
+  VILLAGE_TABS.includes(t) ? "village" : t === "order" ? "plan" : t === "more" ? null : (t as NavKey);
 
 /** Sous-onglet « Village » par défaut : celui de la stratégie. */
 const villageDefault = (s: Settings): Tab => (s.focus === "buildings" ? "buildings" : "heroes");
@@ -44,9 +46,9 @@ const villageDefault = (s: Settings): Tab => (s.focus === "buildings" ? "buildin
 /** Onglets : le profil d'un ami est en lecture seule, sans « Amis » ni « Plus ». */
 export function tabsFor(s: Settings, readOnly = false): Tab[] {
   const tabs: Tab[] = s.focus === "buildings"
-    ? ["summary", "plan", "buildings", "heroes", "lab", "progress", "players", "more"]
-    : ["summary", "plan", "heroes", "buildings", "lab", "progress", "players", "more"];
-  return readOnly ? [...tabs.filter((t) => t !== "players" && t !== "more"), "compare"] : tabs;
+    ? ["summary", "plan", "order", "buildings", "heroes", "lab", "progress", "players", "more"]
+    : ["summary", "plan", "order", "heroes", "buildings", "lab", "progress", "players", "more"];
+  return readOnly ? [...tabs.filter((t) => t !== "players" && t !== "more" && (t !== "order" || s.focus === "custom")), "compare"] : tabs;
 }
 
 export interface DashboardProps {
@@ -63,8 +65,10 @@ export interface DashboardProps {
   tab: Tab;
   onTab: (t: Tab) => void;
   onStrategy: () => void;
-  /** Change de plan (héros, bâtiments, hybride) depuis le dashboard. */
+  /** Change de plan (héros, bâtiments, hybride, perso) depuis le dashboard. */
   onFocus: (f: Focus) => void;
+  /** Ordre perso modifié : passe aussi la stratégie en « Perso ». */
+  onOrder: (o: UpgradeOrder) => void;
   onSettings: () => void;
   onNewExport: () => void;
   onOpenPlayer: (username: string) => void;
@@ -599,7 +603,7 @@ function summaryTab(p: DashboardProps, f: Forecast): HTMLElement {
       { class: "strategy" },
       focusSwitch(p),
       h("span", { class: "strategy-meta" }, `${passText} · ${s.builders + (s.goblinBuilder ? 1 : 0)} ouvriers · ${nf(s.medals)} médailles · ${sleepLabel(s.sleep)}${f.cwl ? ` · LDC à ${s.cwl.hour} h` : ""}`),
-      ro ? null : h("button", { type: "button", class: "link", onClick: p.onSettings }, "Réglages"),
+      ro ? null : h("button", { type: "button", class: "link", onClick: s.focus === "custom" ? () => p.onTab("order") : p.onSettings }, s.focus === "custom" ? "Modifier l'ordre" : "Réglages"),
     ),
     exportAgeNotice(p),
     pushPrompt(p),
@@ -609,7 +613,7 @@ function summaryTab(p: DashboardProps, f: Forecast): HTMLElement {
   );
 }
 
-const FOCUSES: Focus[] = ["heroes", "buildings", "hybrid"];
+const FOCUSES: Focus[] = ["heroes", "buildings", "hybrid", "custom"];
 
 /** Plan choisi, modifiable en un clic ; en lecture seule pour le village d'un ami. */
 function focusSwitch(p: DashboardProps): HTMLElement {
@@ -620,7 +624,7 @@ function focusSwitch(p: DashboardProps): HTMLElement {
     h("span", { class: "focus-switch-label", id: "focus-switch" }, "Plan"),
     h(
       "div",
-      { class: "segmented seg-3", role: "radiogroup", "aria-labelledby": "focus-switch" },
+      { class: "segmented seg-4", role: "radiogroup", "aria-labelledby": "focus-switch" },
       FOCUSES.map((f) =>
         h(
           "button",
@@ -630,6 +634,7 @@ function focusSwitch(p: DashboardProps): HTMLElement {
             class: "seg-btn",
             "aria-checked": String(p.settings.focus === f),
             disabled: ro && p.settings.focus !== f,
+            title: f === "custom" ? "Ton ordre, de A à Z" : undefined,
             onClick: () => !ro && p.settings.focus !== f && p.onFocus(f),
           },
           FOCUS_LABEL[f],
@@ -840,11 +845,39 @@ function waveCard(p: DashboardProps, f: Forecast): HTMLElement {
   );
 }
 
+/** Ordre perso, de A à Z : un onglet du plan. */
+function orderTab(p: DashboardProps, f: Forecast): HTMLElement {
+  const ro = readOnly(p);
+  const custom = p.settings.focus === "custom";
+  return h(
+    "section",
+    { class: "stack" },
+    sectionHead(ro ? `Ordre de ${p.owner}` : "Ordre d'amélioration", "Du plus important au moins important. Le plan se recalcule à chaque changement.", estimate()),
+    !custom && !ro
+      ? h(
+          "div",
+          { class: "banner banner-info" },
+          h("div", null, h("strong", null, `Stratégie actuelle : ${FOCUS_LABEL[p.settings.focus]}. `), "Ton ordre ne sert qu'en « Perso ». Déplacer ou mettre en pause un élément y passe directement."),
+          h("button", { type: "button", class: "btn", onClick: () => p.onFocus("custom") }, "Passer en Perso"),
+        )
+      : null,
+    orderEditor({ village: p.village, settings: p.settings, forecast: f, onChange: ro ? undefined : p.onOrder, rerender: () => p.onTab("order") }),
+  );
+}
+
 function planTab(p: DashboardProps, f: Forecast): HTMLElement {
   return h(
     "section",
     { class: "stack" },
     sectionHead(readOnly(p) ? `Plan de ${p.owner}, jour par jour` : "Ton plan jour par jour", "Heure de Paris. Reviens à ces heures pour relancer.", estimate()),
+    p.settings.focus === "custom"
+      ? h(
+          "div",
+          { class: "strategy" },
+          h("span", { class: "strategy-meta" }, h("strong", null, "Ordre perso"), readOnly(p) ? " : ses priorités, de A à Z." : " : le plan suit tes priorités, de A à Z."),
+          h("button", { type: "button", class: "link", onClick: () => p.onTab("order") }, readOnly(p) ? "Voir l'ordre" : "Modifier l'ordre"),
+        )
+      : null,
     exportAgeNotice(p),
     h("div", { class: "dash-grid" }, rulesCard(p, f), purchaseCard(p)),
     h("h2", { class: "section-title" }, "Calendrier des relances"),
@@ -1318,6 +1351,7 @@ export function dashboardView(p: DashboardProps): HTMLElement {
   const body =
     T <= 0 ? summaryTab(p, f)
     : p.tab === "plan" ? planTab(p, f)
+    : p.tab === "order" && (!readOnly(p) || p.settings.focus === "custom") ? orderTab(p, f)
     : p.tab === "heroes" ? heroesTab(p, f)
     : p.tab === "buildings" ? buildingsTab(p, f)
     : p.tab === "lab" ? labTab(p, f)

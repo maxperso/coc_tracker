@@ -9,14 +9,26 @@ import { HOUR, capacityHours, hoursBetween } from "./time";
 import type { Village } from "./village";
 import { WorkClock } from "./workclock";
 
-/** Que font les ouvriers pendant le Jam. */
-export type Focus = "heroes" | "buildings" | "hybrid";
+/** Que font les ouvriers pendant le Jam. « custom » : l'ordre choisi par le joueur, de A à Z. */
+export type Focus = "heroes" | "buildings" | "hybrid" | "custom";
 
 export const FOCUS_LABEL: Record<Focus, string> = {
   heroes: "Héros",
   buildings: "Bâtiments",
   hybrid: "Hybride",
+  custom: "Perso",
 };
+
+/** Groupes qui travaillent en parallèle : chacun a son ordre. */
+export type OrderPool = "builder" | "lab" | "pet";
+
+/** Ordre perso : types d'amélioration (« buildings:1000008 ») du premier au dernier, et ceux en pause. */
+export interface UpgradeOrder {
+  builder: string[];
+  lab: string[];
+  pet: string[];
+  off: string[];
+}
 
 export interface Settings {
   focus: Focus;
@@ -40,6 +52,8 @@ export interface Settings {
   countBuildingTimers: boolean;
   /** Ligue de clans : héros gardés libres à l'heure d'attaque. */
   cwl: Cwl;
+  /** Ordre d'amélioration utilisé par la stratégie « Perso ». */
+  order: UpgradeOrder;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -59,6 +73,7 @@ export const DEFAULT_SETTINGS: Settings = {
   sleep: { start: 23, end: 7 },
   countBuildingTimers: true,
   cwl: DEFAULT_CWL,
+  order: { builder: [], lab: [], pet: [], off: [] },
 };
 
 export function buildChain(item: ResolvedItem, gates: Gates, scope: BoostScope, hammerable = false): Chain {
@@ -214,11 +229,15 @@ export interface Forecast {
 
 /**
  * Chaînes d'ouvriers selon la stratégie :
+ * - perso : héros et bâtiments dans l'ordre du joueur ;
  * - héros : seuls les héros sont relancés ; les bâtiments en cours finissent ;
  * - bâtiments : seuls les bâtiments sont relancés ; les héros en cours finissent ;
  * - hybride : un héros libre passe toujours en premier, les ouvriers restants vont aux bâtiments.
  */
 export function builderChains(v: Village, s: Settings): { heroes: Chain[]; buildings: Chain[]; other: Chain[] } {
+  if (s.focus === "custom") {
+    return { heroes: ordered(v, s, "builder", heroChains(v)), buildings: ordered(v, s, "builder", buildingChains(v)), other: guardianChains(v) };
+  }
   let heroes: Chain[] = heroChains(v).map((c) => ({ ...c, priority: 0 }));
   let buildings = buildingChains(v);
   if (s.focus === "heroes") buildings = buildings.filter((c) => c.inProgress).map(keepInProgressOnly);
@@ -226,6 +245,47 @@ export function builderChains(v: Village, s: Settings): { heroes: Chain[]; build
   if (!s.countBuildingTimers && s.focus === "heroes") buildings = [];
   return { heroes, buildings, other: guardianChains(v) };
 }
+
+/** Type d'une chaîne : tous les canons partagent la même place dans l'ordre. */
+export const typeKey = (c: Chain) => `${c.category}:${c.entry.id}`;
+
+export function poolChains(v: Village, pool: OrderPool): Chain[] {
+  return pool === "builder" ? [...heroChains(v), ...buildingChains(v)] : pool === "lab" ? labChains(v) : petChains(v);
+}
+
+/** Ordre par défaut : héros puis « défenses d'abord » ; au labo et aux animaux, les plus courts d'abord. */
+const defaultRank = (pool: OrderPool) => (c: Chain) =>
+  pool === "builder" ? (c.category === "heroes" ? -1 : priorityRank(c.category, c.entry)) : (c.steps[0]?.baseSeconds ?? Infinity);
+
+/**
+ * Ordre perso d'un groupe : les types qui ont encore un niveau à monter, dans l'ordre choisi,
+ * puis ceux que le joueur n'a pas encore placés (nouveaux dans l'export), dans l'ordre par défaut.
+ */
+export function customOrder(v: Village, s: Settings, pool: OrderPool): string[] {
+  const rank = defaultRank(pool);
+  const best = new Map<string, number>();
+  for (const c of poolChains(v, pool)) {
+    if (!c.steps.length) continue;
+    const k = typeKey(c);
+    best.set(k, Math.min(best.get(k) ?? Infinity, rank(c)));
+  }
+  const placed = s.order[pool].filter((k) => best.has(k));
+  const seen = new Set(placed);
+  const rest = [...best].filter(([k]) => !seen.has(k)).sort((a, b) => a[1] - b[1]).map(([k]) => k);
+  return [...placed, ...rest];
+}
+
+/** Priorité = rang dans l'ordre perso ; un type en pause finit seulement son chantier en cours. */
+function applyOrder(chains: Chain[], order: string[], off: ReadonlySet<string>): Chain[] {
+  const rank = new Map(order.map((k, i) => [k, i]));
+  return chains.map((c) => {
+    const k = typeKey(c);
+    return off.has(k) ? keepInProgressOnly(c) : { ...c, priority: rank.get(k) ?? order.length };
+  });
+}
+
+const ordered = (v: Village, s: Settings, pool: OrderPool, chains: Chain[]) =>
+  s.focus === "custom" ? applyOrder(chains, customOrder(v, s, pool), new Set(s.order.off)) : chains;
 
 export type BuilderForecast = Pick<Forecast, "heroes" | "buildings" | "builderSlots" | "busyAtExport" | "cwl">;
 
@@ -257,7 +317,7 @@ export function builderForecast(v: Village, s: Settings, cfg: JamConfig = JAM): 
 /** Labo, ordre « plus courtes d'abord » (le plus de niveaux) ou « plus longues d'abord ». */
 export function labForecast(v: Village, s: Settings, policy: Policy = "shortest", cfg: JamConfig = JAM): PoolForecast {
   const labSlots = 1 + (s.goblinResearcher ? 1 : 0);
-  return runPool(v, s, labChains(v), labSlots, s.potions.research, cfg.potions.research.extraHours, policy, [], cfg);
+  return runPool(v, s, ordered(v, s, "lab", labChains(v)), labSlots, s.potions.research, cfg.potions.research.extraHours, policy, [], cfg);
 }
 
 export function forecast(v: Village, s: Settings, cfg: JamConfig = JAM): Forecast {
@@ -265,7 +325,7 @@ export function forecast(v: Village, s: Settings, cfg: JamConfig = JAM): Forecas
     ...builderForecast(v, s, cfg),
     labBest: labForecast(v, s, "shortest", cfg),
     labWorst: labForecast(v, s, "longest", cfg),
-    pets: runPool(v, s, petChains(v), 1, s.potions.pet, cfg.potions.pet.extraHours, "shortest", [], cfg),
+    pets: runPool(v, s, ordered(v, s, "pet", petChains(v)), 1, s.potions.pet, cfg.potions.pet.extraHours, "shortest", [], cfg),
   };
 }
 

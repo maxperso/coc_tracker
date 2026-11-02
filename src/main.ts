@@ -469,7 +469,8 @@ function renderView(): void {
           onDone: (next) => {
             state.newExport = false;
             state.view = "dash";
-            state.tab = "summary";
+            // Premier passage en « Perso » : on montre l'ordre à régler.
+            state.tab = next.focus === "custom" && state.settings.focus !== "custom" ? "order" : "summary";
             void setSettings(next, true);
             window.scrollTo(0, 0);
           },
@@ -518,6 +519,7 @@ function renderView(): void {
       window.scrollTo(0, 0);
     },
     onFocus: (focus) => void setSettings({ ...state.settings, focus }, true),
+    onOrder: (order) => void setSettings({ ...state.settings, focus: "custom", order }),
     onSettings: () => dialog?.showModal(),
     onNewExport: () => ((state.view = "home"), render()),
     onOpenPlayer: (u) => void openPlayer(u),
