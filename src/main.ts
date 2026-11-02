@@ -12,7 +12,7 @@ import { snapshotOf, type Snapshot } from "./lib/history";
 import { DEFAULT_SETTINGS, type Settings } from "./lib/plan";
 import { effectiveSettings } from "./lib/recommend";
 import { buildVillage, type Village } from "./lib/village";
-import { authView, type AuthMode } from "./ui/auth";
+import { authView, type AuthMode, type AuthState } from "./ui/auth";
 import { dashboardView, tabsFor, type Tab } from "./ui/dashboard";
 import { h } from "./ui/dom";
 import { homeView } from "./ui/home";
@@ -31,7 +31,7 @@ interface Loaded {
 const state: {
   view: View;
   me: string | null;
-  auth: { mode: AuthMode; error?: string; busy: boolean };
+  auth: AuthState;
   homeError?: string;
   settings: Settings;
   samePass: boolean;
@@ -45,7 +45,7 @@ const state: {
 } = {
   view: "loading",
   me: null,
-  auth: { mode: "login", busy: false },
+  auth: { mode: "login", busy: false, inviteRequired: true },
   settings: structuredClone(DEFAULT_SETTINGS),
   samePass: true,
   mine: null,
@@ -87,7 +87,7 @@ function handleError(e: unknown): string {
   if (e instanceof ApiError && e.status === 401) {
     state.me = null;
     state.view = "auth";
-    state.auth = { mode: "login", busy: false, error: "Ta session a expiré, reconnecte-toi." };
+    state.auth = { ...state.auth, mode: "login", busy: false, info: undefined, error: "Ta session a expiré, reconnecte-toi." };
     render();
   }
   return e instanceof Error ? e.message : "Erreur inattendue.";
@@ -101,6 +101,13 @@ async function loadMine(): Promise<void> {
 }
 
 async function boot(): Promise<void> {
+  api.authConfig().then(
+    (c) => {
+      state.auth.inviteRequired = c.inviteRequired;
+      if (state.view === "auth") render();
+    },
+    () => {},
+  );
   try {
     state.me = (await api.me()).username;
     await loadMine();
@@ -111,19 +118,56 @@ async function boot(): Promise<void> {
   render();
 }
 
-async function submitAuth(data: { username: string; password: string; inviteCode: string }) {
+function setAuth(mode: AuthMode, extra: Partial<AuthState> = {}) {
+  state.auth = { inviteRequired: state.auth.inviteRequired, mode, busy: false, ...extra };
+  render();
+  (document.querySelector(".auth-card input") as HTMLInputElement | null)?.focus();
+}
+
+/** Lance une action de compte : bouton occupé pendant l'appel, message d'erreur sinon. */
+async function authStep(run: () => Promise<void>) {
   state.auth = { ...state.auth, busy: true, error: undefined };
   render();
   try {
-    const r = state.auth.mode === "register" ? await api.register(data.username, data.password, data.inviteCode) : await api.login(data.username, data.password);
-    state.me = r.username;
-    state.auth = { mode: "login", busy: false };
-    await loadMine();
+    await run();
   } catch (e) {
-    state.auth = { ...state.auth, busy: false, error: e instanceof Error ? e.message : "Erreur inattendue." };
+    if (e instanceof ApiError && e.data.needsVerification) {
+      return setAuth("verify", { username: String(e.data.username ?? ""), info: e.message });
+    }
+    state.auth = { ...state.auth, busy: false, info: undefined, error: e instanceof Error ? e.message : "Erreur inattendue." };
+    render();
   }
+}
+
+async function signedIn(username: string) {
+  state.me = username;
+  state.auth = { mode: "login", busy: false, inviteRequired: state.auth.inviteRequired };
+  await loadMine();
   render();
 }
+
+const authActions = {
+  onMode: (mode: AuthMode) => setAuth(mode, mode === "reset" || mode === "forgot" ? { email: state.auth.email } : {}),
+  onLogin: (d: { username: string; password: string }) => void authStep(async () => signedIn((await api.login(d.username, d.password)).username)),
+  onRegister: (d: { username: string; email: string; password: string; inviteCode: string }) =>
+    void authStep(async () => {
+      const r = await api.register(d);
+      setAuth("verify", { username: r.username, info: r.message });
+    }),
+  onVerify: (d: { username: string; code: string }) => void authStep(async () => signedIn((await api.verify(d.username, d.code)).username)),
+  onResend: (username: string) =>
+    void authStep(async () => {
+      const r = await api.resend(username);
+      setAuth("verify", { username, info: `${r.message} Un nouveau code ne part qu'une fois par minute.` });
+    }),
+  onForgot: (email: string) =>
+    void authStep(async () => {
+      await api.forgot(email);
+      setAuth("reset", { email });
+    }),
+  onReset: (d: { email: string; code: string; password: string }) =>
+    void authStep(async () => signedIn((await api.reset(d.email, d.code, d.password)).username)),
+};
 
 async function submitExport(text: string) {
   const local = parseExport(text.trim());
@@ -190,14 +234,15 @@ async function openPlayer(username: string) {
   window.scrollTo(0, 0);
 }
 
-async function logout() {
-  await api.logout().catch(() => {});
+/** `everywhere` : ferme aussi les sessions des autres appareils. */
+async function logout(everywhere = false) {
+  await (everywhere ? api.logoutAll() : api.logout()).catch(() => {});
   state.me = null;
   state.mine = null;
   state.friend = null;
   state.players = { rows: null };
   state.view = "auth";
-  state.auth = { mode: "login", busy: false };
+  state.auth = { mode: "login", busy: false, inviteRequired: state.auth.inviteRequired };
   render();
 }
 
@@ -220,11 +265,16 @@ function playersPage(): HTMLElement {
       h("button", { type: "button", class: "btn btn-ghost", onClick: () => ((state.view = "home"), render()) }, "Coller mon export"),
     ),
     playersView({ ...state.players, me: state.me!, onOpen: (u) => void openPlayer(u) }),
-    legalFooter(),
   );
 }
 
+/** Affiche la vue courante, puis le pied de page en bas de l'écran. */
 function render(): void {
+  renderView();
+  if (!root.querySelector(":scope > .legal")) root.append(legalFooter());
+}
+
+function renderView(): void {
   const wasOpen = dialog?.open ?? false;
   const focusedId = (document.activeElement as HTMLElement | null)?.id;
   const openDetails = new Set([...root.querySelectorAll("details[open] h2")].map((e) => e.textContent));
@@ -238,11 +288,7 @@ function render(): void {
       return;
     case "auth":
       root.append(
-        authView({
-          ...state.auth,
-          onMode: (mode) => ((state.auth = { mode, busy: false }), render()),
-          onSubmit: (d) => void submitAuth(d),
-        }),
+        authView(state.auth, authActions),
       );
       return;
     case "home":
@@ -265,7 +311,7 @@ function render(): void {
     case "onboarding":
       if (!state.mine) {
         state.view = "home";
-        return render();
+        return renderView();
       }
       root.append(
         onboardingView({
@@ -290,7 +336,7 @@ function render(): void {
   const loaded = friend ?? state.mine;
   if (!loaded) {
     state.view = "home";
-    return render();
+    return renderView();
   }
   const settings = friend ? friend.settings : state.settings;
   const eff = effective(loaded.village, settings);
@@ -299,7 +345,7 @@ function render(): void {
   if (!tabsFor(settings, !!friend).includes(tab)) {
     if (friend) state.friendTab = "summary";
     else state.tab = "summary";
-    return render();
+    return renderView();
   }
 
   const view = dashboardView({
@@ -332,6 +378,7 @@ function render(): void {
       else render();
     },
     onLogout: () => void logout(),
+    onLogoutAll: () => void logout(true),
   });
   for (const d of view.querySelectorAll("details")) {
     if (openDetails.has(d.querySelector("h2")?.textContent ?? "")) d.open = true;

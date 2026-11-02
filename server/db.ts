@@ -31,6 +31,23 @@ const MIGRATIONS: string[] = [
   );
   create index exports_user_time on exports (user_id, exported_at desc);
   `,
+  // 2 : email confirmé à l'inscription, codes envoyés par email (confirmation, mot de passe oublié).
+  `
+  alter table users add column email text;
+  alter table users add column email_verified_at timestamptz;
+  create unique index users_email_lower on users (lower(email));
+
+  create table email_codes (
+    id bigserial primary key,
+    user_id bigint not null references users(id) on delete cascade,
+    purpose text not null check (purpose in ('verify', 'reset')),
+    code_hash text not null,
+    attempts integer not null default 0,
+    expires_at timestamptz not null,
+    created_at timestamptz not null default now()
+  );
+  create index email_codes_user on email_codes (user_id, purpose);
+  `,
 ];
 
 export async function migrate(db: Db): Promise<number> {

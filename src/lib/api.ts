@@ -7,6 +7,18 @@ export interface MeResponse {
   username: string;
 }
 
+export interface AuthConfigResponse {
+  /** L'inscription demande un code d'invitation. */
+  inviteRequired: boolean;
+}
+
+/** Réponse quand un code vient (peut-être) de partir par email. */
+export interface PendingResponse {
+  pending: true;
+  username: string;
+  message: string;
+}
+
 export interface PlayerRow {
   username: string;
   summary: PlayerSummary;

@@ -1,6 +1,5 @@
 import { MAX_EXPORT_CHARS } from "../lib/exportParse";
 import { h } from "./dom";
-import { legalFooter } from "./legal";
 
 export function homeView(opts: {
   error?: string;
@@ -78,6 +77,5 @@ export function homeView(opts: {
       h("button", { type: "button", class: "btn btn-ghost", onClick: opts.onPlayers }, "Voir les potes"),
       h("button", { type: "button", class: "btn btn-ghost", onClick: opts.onLogout }, "Se déconnecter"),
     ),
-    legalFooter(true),
   );
 }

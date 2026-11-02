@@ -26,11 +26,20 @@ services:
     environment:
       DATABASE_URL: postgres://coc:${POSTGRES_PASSWORD}@db:5432/coc
       JWT_SECRET: ${JWT_SECRET:?définis JWT_SECRET dans .env}
-      INVITE_CODE: ${INVITE_CODE:?définis INVITE_CODE dans .env}
+      INVITE_CODE: ${INVITE_CODE:-}
       APP_ORIGIN: ${APP_ORIGIN:-https://coc.maxperso.fr}
       COOKIE_SECURE: ${COOKIE_SECURE:-true}
+      TRUST_PROXY: ${TRUST_PROXY:-loopback,linklocal,uniquelocal}
+      SMTP_HOST: ${SMTP_HOST:?définis SMTP_HOST dans .env (emails de confirmation)}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_SECURE: ${SMTP_SECURE:-false}
+      SMTP_REQUIRE_TLS: ${SMTP_REQUIRE_TLS:-true}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+      MAIL_FROM: ${MAIL_FROM:?définis MAIL_FROM dans .env}
     ports:
-      - "${APP_PORT:-3000}:3000"
+      # APP_BIND : mets l'IP sur laquelle Nginx Proxy Manager joint l'hôte, pour ne pas exposer l'app en HTTP clair.
+      - "${APP_BIND:-0.0.0.0}:${APP_PORT:-3000}:3000"
 
 volumes:
   pgdata:

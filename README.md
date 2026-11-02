@@ -1,8 +1,8 @@
-# Suivi Hammer Jam
+# COC Tracker
 
 Site pour suivre son village Clash of Clans pendant le Hammer Jam, et l'avancement de ses potes.
-Chaque joueur crée un compte (pseudo + mot de passe, avec un code d'invitation), colle l'export
-de son village et voit son plan : héros, bâtiments, labo, potions, achats en médailles.
+Chaque joueur crée un compte (pseudo, email confirmé par un code, mot de passe, code d'invitation),
+colle l'export de son village et voit son plan : héros, bâtiments, labo, potions, achats en médailles.
 Tous les inscrits voient le classement et le plan des autres, en lecture seule.
 
 Les calculs se font dans le navigateur. Le serveur garde les comptes, les exports et les réglages.
@@ -34,8 +34,10 @@ git clone … && cd coc_tracker
 cp .env.example .env
 # POSTGRES_PASSWORD : openssl rand -hex 24
 # JWT_SECRET        : openssl rand -hex 32
-# INVITE_CODE       : le code à donner à tes potes
+# INVITE_CODE       : le code à donner à tes potes (vide = inscription ouverte)
+# SMTP_* et MAIL_FROM : voir ci-dessous
 docker compose up -d --build
+docker compose logs app | grep SMTP     # « SMTP prêt » : les emails partiront
 ```
 
 L'app écoute sur le port `APP_PORT` (3000 par défaut) de l'hôte. Les migrations de la base
@@ -53,6 +55,22 @@ Nouveau *Proxy Host* :
 Le HTTPS est obligatoire : le cookie de session est `Secure`. `APP_ORIGIN` doit être exactement
 l'adresse publique (`https://coc.maxperso.fr`), sinon les connexions et envois sont refusés.
 
+### Emails (SMTP de WordPress)
+
+Le site envoie un code à 6 chiffres pour confirmer l'email à l'inscription, et pour le mot de passe
+oublié. Reprends les réglages SMTP de WordPress (WP Mail SMTP, Post SMTP…) :
+
+| WordPress | `.env` |
+|---|---|
+| SMTP Host | `SMTP_HOST` |
+| SMTP Port | `SMTP_PORT` (587 ou 465) |
+| Encryption TLS / SSL | `SMTP_SECURE=false` (587, STARTTLS) ou `true` (465) |
+| Username / Password | `SMTP_USER` / `SMTP_PASS` |
+| From Email | `MAIL_FROM="COC Tracker <adresse>"` |
+
+Si ton WordPress envoie via une API (Gmail OAuth, Brevo API…) et non en SMTP, crée plutôt des
+identifiants SMTP chez le même fournisseur. Sans SMTP, l'app refuse de démarrer en production.
+
 ### Administration
 
 ```bash
@@ -64,11 +82,17 @@ Sauvegarde : `docker compose exec db pg_dump -U coc coc > sauvegarde.sql`
 
 ## Sécurité
 
-- Mots de passe hachés avec argon2id. Session : JWT HS256 dans un cookie `httpOnly`, `Secure`,
-  `SameSite=Lax`, valable 30 jours, révoqué si le mot de passe est réinitialisé.
-- Inscription seulement avec le code d'invitation. Connexion et inscription limitées à 10 essais par minute.
-- Les écritures venant d'une autre origine que `APP_ORIGIN` sont refusées. CSP stricte, pas de script tiers.
-- L'export collé est validé côté serveur avant d'être enregistré.
+- Mots de passe hachés avec argon2id. Session : JWT HS256 dans un cookie `__Host-` `httpOnly`, `Secure`,
+  `SameSite=Lax`, valable 30 jours, révoqué si le mot de passe est réinitialisé ou via « Se déconnecter partout ».
+- Email confirmé obligatoire. Codes à 6 chiffres hachés (HMAC), valables 15 minutes, 5 essais, usage unique,
+  un envoi par minute au plus. « Mot de passe oublié » et l'inscription ne révèlent pas si un email existe.
+- Limites de tentatives par IP (5 à 10 par minute sur les comptes, 300 par minute sur l'API). Seuls les proxys
+  du réseau privé sont crus pour `X-Forwarded-For` (`TRUST_PROXY`) : pas de contournement en usurpant une IP.
+- Écritures refusées si elles viennent d'une autre origine (`Origin`, `Sec-Fetch-Site`). CSP stricte,
+  `no-store` sur l'API, erreurs internes jamais détaillées au client.
+- L'export collé est validé côté serveur ; 60 exports gardés par compte au plus.
+- Laisse l'app joignable seulement par Nginx Proxy Manager (`APP_BIND`, pare-feu) : en HTTP direct, le cookie
+  `Secure` ne passe pas et la connexion est inutilisable.
 
 ## Données et crédits
 

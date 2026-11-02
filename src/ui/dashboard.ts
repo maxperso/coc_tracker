@@ -13,7 +13,6 @@ import type { Village } from "../lib/village";
 import { progressChart } from "./chart";
 import { compact, h, nf } from "./dom";
 import { ganttCard } from "./gantt";
-import { legalFooter } from "./legal";
 import { about, comparison, details, exportCheck, historyView, potionPlanView } from "./more";
 import { sleepLabel } from "./sleep";
 import { playersView } from "./players";
@@ -59,6 +58,7 @@ export interface DashboardProps {
   onOpenPlayer: (username: string) => void;
   onBack: () => void;
   onLogout: () => void;
+  onLogoutAll: () => void;
 }
 
 const readOnly = (p: DashboardProps) => p.owner.toLowerCase() !== p.me.toLowerCase();
@@ -86,7 +86,7 @@ function appHeader(p: DashboardProps): HTMLElement {
         h(
           "div",
           null,
-          h("p", { class: "brand-name" }, readOnly(p) ? `Village de ${p.owner}` : "Hammer Jam"),
+          h("p", { class: "brand-name" }, readOnly(p) ? `Village de ${p.owner}` : "COC Tracker"),
           h("p", { class: "brand-meta" }, `${v.tag} · HDV ${v.th}`),
         ),
       ),
@@ -670,6 +670,7 @@ function moreTab(p: DashboardProps, f: Forecast): HTMLElement {
         { class: "button-row" },
         h("button", { type: "button", class: "btn btn-ghost", onClick: p.onNewExport }, "Coller un nouvel export"),
         h("button", { type: "button", class: "btn btn-ghost", onClick: p.onLogout }, "Se déconnecter"),
+        h("button", { type: "button", class: "btn btn-ghost", onClick: p.onLogoutAll }, "Se déconnecter partout"),
       ),
     ),
   );
@@ -704,7 +705,7 @@ export function dashboardView(p: DashboardProps): HTMLElement {
     "div",
     { class: "app" },
     appHeader(p),
-    h("main", { class: "page dash" }, h("p", { class: "eyebrow" }, `Export du ${fmtDateTime(toDate(v.timestamp, 0))} · heure de Paris`), body, legalFooter()),
+    h("main", { class: "page dash" }, h("p", { class: "eyebrow" }, `Export du ${fmtDateTime(toDate(v.timestamp, 0))} · heure de Paris`), body),
   );
 }
 
