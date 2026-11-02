@@ -24,7 +24,17 @@ function countdown(): string | null {
 }
 
 /** Page d'accueil publique, avant connexion. */
-export function landingView(a: { onLogin: () => void; onRegister: () => void }): HTMLElement {
+export function landingView(a: {
+  /** Joueur connecté, ou null. */
+  me: string | null;
+  error?: string;
+  onLogin: () => void;
+  onRegister: () => void;
+  onDashboard: () => void;
+  onFriends: () => void;
+  onLogout: () => void;
+  onDemo: () => void;
+}): HTMLElement {
   const left = countdown();
   const end = new Date(JAM.end);
   const features: [HTMLElement | null, string, string][] = [
@@ -55,12 +65,27 @@ export function landingView(a: { onLogin: () => void; onRegister: () => void }):
           { class: "lead" },
           `COC Tracker lit l'export de ton village Clash of Clans et te dit quoi améliorer avant le ${fmtDayLong(end)} à ${fmtHour(end)}, avec -50 % sur le temps et le coût.`,
         ),
-        h(
-          "div",
-          { class: "button-row" },
-          h("button", { type: "button", class: "btn btn-primary btn-lg", onClick: a.onRegister }, "Créer mon compte"),
-          h("button", { type: "button", class: "btn btn-ghost btn-lg", onClick: a.onLogin }, "J'ai déjà un compte"),
-        ),
+        a.error ? h("p", { class: "alert", role: "alert" }, a.error) : null,
+        a.me
+          ? h(
+              "div",
+              { class: "landing-me" },
+              h("p", { class: "muted" }, "Connecté en tant que ", h("strong", null, a.me), "."),
+              h(
+                "div",
+                { class: "button-row" },
+                h("button", { type: "button", class: "btn btn-primary btn-lg", onClick: a.onDashboard }, "Ouvrir mon dashboard"),
+                h("button", { type: "button", class: "btn btn-ghost btn-lg", onClick: a.onFriends }, "Voir mes amis"),
+                h("button", { type: "button", class: "btn btn-ghost btn-lg", onClick: a.onLogout }, "Se déconnecter"),
+              ),
+            )
+          : h(
+              "div",
+              { class: "button-row" },
+              h("button", { type: "button", class: "btn btn-primary btn-lg", onClick: a.onRegister }, "Créer mon compte"),
+              h("button", { type: "button", class: "btn btn-ghost btn-lg", onClick: a.onLogin }, "J'ai déjà un compte"),
+            ),
+        h("button", { type: "button", class: "link", onClick: a.onDemo }, "Voir une démo sans compte →"),
       ),
       h(
         "div",
@@ -111,7 +136,9 @@ export function landingView(a: { onLogin: () => void; onRegister: () => void }):
       h(
         "div",
         { class: "button-row center-row" },
-        h("button", { type: "button", class: "btn btn-primary btn-lg", onClick: a.onRegister }, "Commencer"),
+        a.me
+          ? h("button", { type: "button", class: "btn btn-primary btn-lg", onClick: a.onDashboard }, "Ouvrir mon dashboard")
+          : h("button", { type: "button", class: "btn btn-primary btn-lg", onClick: a.onRegister }, "Commencer"),
       ),
     ),
   );

@@ -10,6 +10,13 @@ export interface SmtpConfig {
   from: string;
 }
 
+export interface VapidConfig {
+  publicKey: string;
+  privateKey: string;
+  /** Contact du serveur pour les services push, ex. mailto:admin@exemple.fr. */
+  subject: string;
+}
+
 export interface Config {
   port: number;
   host: string;
@@ -28,6 +35,8 @@ export interface Config {
   staticDir: string | null;
   /** Absent : les emails sont écrits dans les logs (dev seulement). */
   smtp: SmtpConfig | null;
+  /** Absent : les notifications push sont désactivées. */
+  vapid: VapidConfig | null;
 }
 
 function required(env: NodeJS.ProcessEnv, name: string): string {
@@ -56,6 +65,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     : null;
   if (production && !smtp) throw new Error("SMTP_HOST et MAIL_FROM sont obligatoires en production (emails de confirmation).");
 
+  const vapid: VapidConfig | null =
+    env.VAPID_PUBLIC_KEY && env.VAPID_PRIVATE_KEY
+      ? { publicKey: env.VAPID_PUBLIC_KEY, privateKey: env.VAPID_PRIVATE_KEY, subject: env.VAPID_SUBJECT || "mailto:admin@localhost" }
+      : null;
+
   return {
     port: Number(env.PORT ?? 3000),
     host: env.HOST ?? "0.0.0.0",
@@ -68,5 +82,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     trustProxy: env.TRUST_PROXY ?? "loopback,linklocal,uniquelocal",
     staticDir: env.STATIC_DIR ?? null,
     smtp,
+    vapid,
   };
 }

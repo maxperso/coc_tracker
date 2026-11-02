@@ -9,11 +9,14 @@ import { api, ApiError } from "./lib/client";
 import { parseExport } from "./lib/exportParse";
 import { gameIndex } from "./lib/gamedata";
 import { snapshotOf, type Snapshot } from "./lib/history";
+import demoExport from "./data/demo.json";
 import { DEFAULT_SETTINGS, type Settings } from "./lib/plan";
 import { effectiveSettings } from "./lib/recommend";
+import { canInstall, disablePush, enablePush, install, isIos, isStandalone, onPwaChange, pushState, registerServiceWorker, type PushState } from "./lib/pwa";
+import { applyTheme, loadTheme, saveTheme, type ThemePref } from "./lib/theme";
 import { buildVillage, type Village } from "./lib/village";
 import { authView, type AuthMode, type AuthState } from "./ui/auth";
-import { dashboardView, tabsFor, type Tab } from "./ui/dashboard";
+import { dashboardView, tabsFor, themeControl, type Tab } from "./ui/dashboard";
 import { h } from "./ui/dom";
 import { homeView } from "./ui/home";
 import { landingView } from "./ui/landing";
@@ -27,6 +30,8 @@ type View = "loading" | "landing" | "auth" | "home" | "onboarding" | "dash" | "p
 interface Loaded {
   village: Village;
   history: Snapshot[];
+  /** Actions du plan cochées « fait » pour cet export. */
+  checks: Set<string>;
 }
 
 const state: {
@@ -34,6 +39,8 @@ const state: {
   me: string | null;
   auth: AuthState;
   homeError?: string;
+  /** Message sur la page d'accueil (serveur injoignable). */
+  landingError?: string;
   settings: Settings;
   samePass: boolean;
   mine: Loaded | null;
@@ -41,7 +48,7 @@ const state: {
   newExport: boolean;
   tab: Tab;
   players: { rows: PlayerRow[] | null; error?: string };
-  friend: (Loaded & { username: string; settings: Settings }) | null;
+  friend: (Loaded & { username: string; settings: Settings; demo?: boolean }) | null;
   friendTab: Tab;
 } = {
   view: "loading",
@@ -57,7 +64,22 @@ const state: {
   friendTab: "summary",
 };
 
+let theme: ThemePref = loadTheme();
+applyTheme(theme);
+function setTheme(t: ThemePref) {
+  theme = t;
+  saveTheme(t);
+}
+
 const root = document.getElementById("app")!;
+
+registerServiceWorker();
+let push: PushState | "loading" = "loading";
+async function refreshPush() {
+  push = await pushState().catch(() => "unsupported" as const);
+  if (state.view === "dash" || state.view === "profile") render();
+}
+onPwaChange(() => void refreshPush());
 let dialog: HTMLDialogElement | null = null;
 
 /** Recommandation d'achats mise en cache : elle ne change qu'avec l'export ou les réglages. */
@@ -80,7 +102,10 @@ function loadProfile(p: PlayerProfile): Loaded | null {
     return r.ok ? [buildVillage(r.value, gameIndex())] : [];
   });
   const village = villages.at(-1);
-  return village ? { village, history: villages.map(snapshotOf) } : null;
+  if (!village) return null;
+  // Les coches ne valent que pour l'export auquel elles se rapportent.
+  const checks = new Set(p.checks && p.checks.exportAt === village.timestamp ? p.checks.keys : []);
+  return { village, history: villages.map(snapshotOf), checks };
 }
 
 /** Session expirée : retour à l'écran de connexion. */
@@ -99,8 +124,9 @@ async function loadMine(): Promise<void> {
   state.settings = settings;
   state.mine = loadProfile(profile);
   state.view = state.mine ? "dash" : "home";
-  // Le classement sert aussi au dashboard : chargé en fond.
+  // Le classement sert aussi au dashboard : chargé en fond, comme l'état des rappels.
   void loadPlayers();
+  void refreshPush();
 }
 
 async function boot(): Promise<void> {
@@ -115,14 +141,39 @@ async function boot(): Promise<void> {
     state.me = (await api.me()).username;
     await loadMine();
   } catch (e) {
-    if (!(e instanceof ApiError && e.status === 401)) {
-      state.auth.error = handleError(e);
-      state.view = "auth";
-    } else {
-      state.view = "landing";
-    }
+    // Pas de session (401) : rien à signaler. Sinon, le serveur ne répond pas.
+    if (!(e instanceof ApiError && e.status === 401)) state.landingError = "Le serveur ne répond pas pour le moment : la connexion est indisponible.";
   }
+  // La page d'accueil s'affiche toujours en premier, connecté ou non.
+  state.view = "landing";
   render();
+}
+
+/** Depuis la page d'accueil : ton dashboard, ou l'écran pour coller l'export s'il n'y en a pas encore. */
+function openMine() {
+  state.friend = null;
+  state.view = state.mine ? "dash" : "home";
+  state.tab = "summary";
+  render();
+  window.scrollTo(0, 0);
+}
+
+/** Démo depuis la page d'accueil : un village anonymisé, en lecture seule. */
+function openDemo() {
+  const r = parseExport(JSON.stringify(demoExport));
+  if (!r.ok) return;
+  const village = buildVillage(r.value, gameIndex());
+  state.friend = { village, history: [snapshotOf(village)], checks: new Set(), username: "Démo", settings: { ...structuredClone(DEFAULT_SETTINGS), focus: "hybrid" }, demo: true };
+  state.friendTab = "summary";
+  state.view = "profile";
+  render();
+  window.scrollTo(0, 0);
+}
+
+function goLanding() {
+  state.view = "landing";
+  render();
+  window.scrollTo(0, 0);
 }
 
 function setAuth(mode: AuthMode, extra: Partial<AuthState> = {}) {
@@ -222,6 +273,29 @@ function setSettings(next: Settings, immediate = false): Promise<void> {
   return Promise.resolve();
 }
 
+let checksTimer: ReturnType<typeof setTimeout> | undefined;
+/** Coche « fait » : enregistrée sur le serveur un instant plus tard, sans redessiner la page. */
+function toggleCheck(key: string, done: boolean) {
+  const mine = state.mine;
+  if (!mine) return;
+  if (done) mine.checks.add(key);
+  else mine.checks.delete(key);
+  clearTimeout(checksTimer);
+  checksTimer = setTimeout(() => {
+    api.saveChecks({ exportAt: mine.village.timestamp, keys: [...mine.checks] }).catch((e) => void handleError(e));
+  }, 500);
+}
+
+async function togglePush(enable: boolean) {
+  try {
+    push = enable ? await enablePush() : await disablePush();
+    if (enable && push === "on") await api.pushTest().catch(() => {});
+  } catch {
+    push = await pushState().catch(() => "unsupported" as const);
+  }
+  render();
+}
+
 async function loadPlayers() {
   try {
     state.players = { rows: await api.players() };
@@ -305,7 +379,27 @@ function renderView(): void {
       root.append(h("main", { class: "page home" }, h("p", { class: "muted center" }, "Chargement…")));
       return;
     case "landing":
-      root.append(landingView({ onLogin: () => openAuth("login"), onRegister: () => openAuth("register") }));
+      root.append(
+        landingView({
+          me: state.me,
+          error: state.landingError,
+          onLogin: () => openAuth("login"),
+          onRegister: () => openAuth("register"),
+          onDashboard: openMine,
+          onFriends: () => {
+            if (state.mine) {
+              state.friend = null;
+              state.view = "dash";
+              goTab("players");
+            } else {
+              state.view = "players";
+              void loadPlayers();
+            }
+          },
+          onLogout: () => void logout(),
+          onDemo: openDemo,
+        }),
+      );
       return;
     case "auth":
       root.append(
@@ -374,8 +468,9 @@ function renderView(): void {
     settings: eff.settings,
     purchase: eff.purchase,
     history: loaded.history,
-    me: state.me!,
+    me: state.me ?? "",
     owner,
+    demo: friend?.demo,
     players: state.players,
     tab,
     onTab: (t) => {
@@ -390,6 +485,7 @@ function renderView(): void {
       render();
       window.scrollTo(0, 0);
     },
+    onFocus: (focus) => void setSettings({ ...state.settings, focus }, true),
     onSettings: () => dialog?.showModal(),
     onNewExport: () => ((state.view = "home"), render()),
     onOpenPlayer: (u) => void openPlayer(u),
@@ -398,15 +494,23 @@ function renderView(): void {
       if (state.mine) goTab("players");
       else render();
     },
-    onMine: () => {
-      state.friend = null;
-      state.view = state.mine ? "dash" : "home";
-      state.tab = "summary";
-      render();
-      window.scrollTo(0, 0);
-    },
+    onMine: () => (friend?.demo && !state.me ? openAuth("register") : openMine()),
+    onHome: goLanding,
     onLogout: () => void logout(),
     onLogoutAll: () => void logout(true),
+    theme,
+    onTheme: setTheme,
+    checks: loaded.checks,
+    onCheck: friend ? undefined : toggleCheck,
+    push,
+    onPush: (enable) => void togglePush(enable),
+    onPushTest: () => void api.pushTest().catch((e) => void handleError(e)),
+    install: { available: canInstall(), ios: isIos(), standalone: isStandalone() },
+    onInstall: () => void install().then(() => render()),
+    compare:
+      friend && !friend.demo && state.mine && state.me
+        ? { me: state.me, village: state.mine.village, settings: effective(state.mine.village, state.settings).settings }
+        : undefined,
   });
   for (const d of view.querySelectorAll("details")) {
     if (openDetails.has(d.querySelector("h2")?.textContent ?? "")) d.open = true;
@@ -414,9 +518,16 @@ function renderView(): void {
   root.append(view);
 
   if (friend) return;
-  dialog = settingsDialog(state.settings, eff.settings, state.samePass, (s) => void setSettings(s), (same) => {
-    state.samePass = same;
-  });
+  dialog = settingsDialog(
+    state.settings,
+    eff.settings,
+    state.samePass,
+    (s) => void setSettings(s),
+    (same) => {
+      state.samePass = same;
+    },
+    themeControl(theme, setTheme),
+  );
   document.body.append(dialog);
   if (wasOpen) {
     dialog.showModal();

@@ -19,7 +19,9 @@ import {
   USERNAME_RE,
   type SessionUser,
 } from "./auth";
+import { MAX_CHECK_KEY, MAX_CHECKS } from "../src/lib/reminders";
 import { consumeCode, createCode, sentRecently } from "./codes";
+import { isAllowedEndpoint, MAX_SUBSCRIPTIONS, rebuildQueue, sendToUser, type PushSender } from "./push";
 import type { Config } from "./config";
 import type { Db } from "./db";
 import { mails, type Mail, type Mailer } from "./mailer";
@@ -42,6 +44,12 @@ const Resend = z.object({ username: z.string().max(40) });
 const Forgot = z.object({ email: Email });
 const Reset = z.object({ email: Email, code: Code, password: Password });
 const ExportBody = z.object({ text: z.string().max(MAX_EXPORT_CHARS) });
+const Checks = z.object({ exportAt: z.number().int().positive(), keys: z.array(z.string().min(1).max(MAX_CHECK_KEY)).max(MAX_CHECKS) });
+const Subscription = z.object({
+  endpoint: z.string().max(2000),
+  keys: z.object({ p256dh: z.string().min(10).max(200), auth: z.string().min(8).max(100) }),
+});
+const Unsubscribe = z.object({ endpoint: z.string().max(2000) });
 
 const CSP = [
   "default-src 'none'",
@@ -51,6 +59,7 @@ const CSP = [
   "font-src 'self' data:",
   "connect-src 'self'",
   "manifest-src 'self'",
+  "worker-src 'self'",
   "base-uri 'none'",
   "form-action 'none'",
   "frame-ancestors 'none'",
@@ -75,7 +84,7 @@ interface UserRow {
 
 const USER_COLS = "id, username, email, password_hash, token_version, email_verified_at is not null as verified";
 
-export async function buildApp(cfg: Config, db: Db, mailer: Mailer) {
+export async function buildApp(cfg: Config, db: Db, mailer: Mailer, push: PushSender | null = null) {
   const app = Fastify({
     logger: process.env.NODE_ENV === "test" ? false : { level: "info" },
     // Seuls les proxys du réseau privé (Nginx Proxy Manager, Docker) sont crus pour X-Forwarded-*.
@@ -129,6 +138,12 @@ export async function buildApp(cfg: Config, db: Db, mailer: Mailer) {
   /** Envoi sans attendre : la réponse ne dépend pas du serveur mail (pas d'indice par le temps de réponse). */
   const sendLater = (mail: Mail) => {
     mailer.send(mail).catch((e) => app.log.error({ err: e, subject: mail.subject }, "Échec d'envoi d'email"));
+  };
+
+  /** Rappels recalculés en arrière-plan : la réponse n'attend pas ce calcul. */
+  const refreshReminders = (userId: number) => {
+    if (!push) return;
+    rebuildQueue(db, userId).catch((e) => app.log.error({ err: e }, "Échec du calcul des rappels"));
   };
 
   const findUser = async (where: string, value: string) => {
@@ -294,6 +309,7 @@ export async function buildApp(cfg: Config, db: Db, mailer: Mailer) {
       const summary = summarize(villageFromText(JSON.stringify(rows[0].raw)), body.data);
       await db.query("update exports set summary = $2 where id = $1", [rows[0].id, summary]);
     }
+    refreshReminders(req.user!.id);
     return body.data;
   });
 
@@ -321,6 +337,7 @@ export async function buildApp(cfg: Config, db: Db, mailer: Mailer) {
          select id from exports where user_id = $1 order by exported_at desc limit $2)`,
       [req.user!.id, KEPT_EXPORTS],
     );
+    refreshReminders(req.user!.id);
     return reply.code(201).send({ ok: true });
   });
 
@@ -338,8 +355,8 @@ export async function buildApp(cfg: Config, db: Db, mailer: Mailer) {
   });
 
   app.get<{ Params: { username: string } }>("/api/players/:username", { preHandler: requireUser }, async (req, reply) => {
-    const { rows: users } = await db.query<{ id: string; username: string; settings: unknown }>(
-      "select id, username, settings from users where lower(username) = lower($1) and email_verified_at is not null",
+    const { rows: users } = await db.query<{ id: string; username: string; settings: unknown; plan_checks: PlayerProfile["checks"] }>(
+      "select id, username, settings, plan_checks from users where lower(username) = lower($1) and email_verified_at is not null",
       [req.params.username],
     );
     const u = users[0];
@@ -354,7 +371,57 @@ export async function buildApp(cfg: Config, db: Db, mailer: Mailer) {
       username: u.username,
       settings: parseSettings(u.settings),
       exports: rows.map((r) => ({ raw: r.raw, exportedAt: r.exported_at.toISOString() })),
+      checks: u.plan_checks ?? null,
     } satisfies PlayerProfile;
+  });
+
+  /* ---------- Plan coché ---------- */
+
+  app.put("/api/me/checks", { preHandler: requireUser }, async (req, reply) => {
+    const body = Checks.safeParse(req.body);
+    if (!body.success) return bad(reply, body.error);
+    const value = { exportAt: body.data.exportAt, keys: [...new Set(body.data.keys)] };
+    await db.query("update users set plan_checks = $2 where id = $1", [req.user!.id, value]);
+    return value;
+  });
+
+  /* ---------- Notifications push ---------- */
+
+  app.get("/api/push/config", async () => ({ enabled: push != null && cfg.vapid != null, publicKey: cfg.vapid?.publicKey ?? null }));
+
+  app.post("/api/push/subscribe", { preHandler: requireUser, config: { rateLimit: { max: 10, timeWindow: "1 minute" } } }, async (req, reply) => {
+    if (!push) return reply.code(503).send({ error: "Les notifications ne sont pas activées sur ce serveur." });
+    const body = Subscription.safeParse(req.body);
+    if (!body.success) return bad(reply, body.error);
+    if (!isAllowedEndpoint(body.data.endpoint)) return reply.code(400).send({ error: "Service de notification non reconnu." });
+    const userId = req.user!.id;
+    await db.query(
+      `insert into push_subscriptions (user_id, endpoint, p256dh, auth) values ($1, $2, $3, $4)
+       on conflict (endpoint) do update set user_id = excluded.user_id, p256dh = excluded.p256dh, auth = excluded.auth`,
+      [userId, body.data.endpoint, body.data.keys.p256dh, body.data.keys.auth],
+    );
+    // Au-delà de MAX_SUBSCRIPTIONS appareils, les plus anciens sont oubliés.
+    await db.query(
+      `delete from push_subscriptions where user_id = $1 and id not in (
+         select id from push_subscriptions where user_id = $1 order by created_at desc limit $2)`,
+      [userId, MAX_SUBSCRIPTIONS],
+    );
+    refreshReminders(userId);
+    return reply.code(201).send({ ok: true });
+  });
+
+  app.post("/api/push/unsubscribe", { preHandler: requireUser }, async (req, reply) => {
+    const body = Unsubscribe.safeParse(req.body);
+    if (!body.success) return bad(reply, body.error);
+    await db.query("delete from push_subscriptions where user_id = $1 and endpoint = $2", [req.user!.id, body.data.endpoint]);
+    refreshReminders(req.user!.id);
+    return { ok: true };
+  });
+
+  app.post("/api/push/test", { preHandler: requireUser, config: { rateLimit: { max: 3, timeWindow: "1 minute" } } }, async (req, reply) => {
+    if (!push) return reply.code(503).send({ error: "Les notifications ne sont pas activées sur ce serveur." });
+    const sent = await sendToUser(db, push, req.user!.id, { title: "COC Tracker", body: "Les rappels sont activés sur cet appareil.", tag: "test" });
+    return { sent };
   });
 
   /* ---------- Site ---------- */
@@ -367,7 +434,8 @@ export async function buildApp(cfg: Config, db: Db, mailer: Mailer) {
       // index.html toujours revalidé (nouvelle version visible tout de suite) ;
       // fichiers à empreinte de Vite gardés un an ; sprites une journée.
       setHeaders: (res, path) => {
-        const cache = path.endsWith(".html")
+        // Le service worker et le manifeste doivent être relus à chaque visite pour se mettre à jour.
+        const cache = path.endsWith(".html") || path.endsWith("/sw.js") || path.endsWith(".webmanifest")
           ? "no-cache"
           : path.includes("/assets/")
             ? "public, max-age=31536000, immutable"

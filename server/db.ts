@@ -48,6 +48,32 @@ const MIGRATIONS: string[] = [
   );
   create index email_codes_user on email_codes (user_id, purpose);
   `,
+  // 3 : actions du plan cochées « fait », notifications push (abonnements et rappels à envoyer).
+  `
+  alter table users add column plan_checks jsonb;
+
+  create table push_subscriptions (
+    id bigserial primary key,
+    user_id bigint not null references users(id) on delete cascade,
+    endpoint text not null unique,
+    p256dh text not null,
+    auth text not null,
+    created_at timestamptz not null default now()
+  );
+  create index push_subscriptions_user on push_subscriptions (user_id);
+
+  create table push_queue (
+    id bigserial primary key,
+    user_id bigint not null references users(id) on delete cascade,
+    key text not null,
+    send_at timestamptz not null,
+    title text not null,
+    body text not null,
+    sent_at timestamptz,
+    unique (user_id, key)
+  );
+  create index push_queue_due on push_queue (send_at) where sent_at is null;
+  `,
 ];
 
 export async function migrate(db: Db): Promise<number> {

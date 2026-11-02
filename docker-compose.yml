@@ -37,6 +37,9 @@ services:
       SMTP_USER: ${SMTP_USER:-}
       SMTP_PASS: ${SMTP_PASS:-}
       MAIL_FROM: ${MAIL_FROM:?définis MAIL_FROM dans .env}
+      VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY:-}
+      VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
+      VAPID_SUBJECT: ${VAPID_SUBJECT:-mailto:admin@localhost}
     ports:
       # APP_BIND : mets l'IP sur laquelle Nginx Proxy Manager joint l'hôte, pour ne pas exposer l'app en HTTP clair.
       - "${APP_BIND:-0.0.0.0}:${APP_PORT:-3000}:3000"

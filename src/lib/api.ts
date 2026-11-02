@@ -26,6 +26,18 @@ export interface PlayerRow {
   updatedAt: string;
 }
 
+/** Actions du plan cochées « fait », pour un export donné. */
+export interface PlanChecks {
+  /** Secondes Unix de l'export auquel se rapportent les coches. */
+  exportAt: number;
+  keys: string[];
+}
+
+export interface PushConfigResponse {
+  enabled: boolean;
+  publicKey: string | null;
+}
+
 export interface StoredExport {
   /** Export tel que collé dans le jeu (objet JSON). */
   raw: unknown;
@@ -37,6 +49,8 @@ export interface PlayerProfile {
   settings: Settings;
   /** Exports du plus ancien au plus récent (30 au plus). */
   exports: StoredExport[];
+  /** Coches du plan ; à ignorer si elles concernent un autre export que le dernier. */
+  checks: PlanChecks | null;
 }
 
 export interface ApiError {
