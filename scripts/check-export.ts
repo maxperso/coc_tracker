@@ -49,6 +49,7 @@ for (const h of heroesNow) console.log(`  ${h.entry.name} : niveau ${h.lvl}${h.t
 
 const base: Settings = {
   ...DEFAULT_SETTINGS,
+  sleep: null,
   potions: { ...DEFAULT_SETTINGS.potions, builder: { owned: Math.min(5, builderPotions), purchases: Math.max(0, builderPotions - 5) } },
 };
 for (const g of [0, 0.1, 0.15, 0.2]) {
@@ -71,5 +72,24 @@ for (const focus of ["heroes", "buildings", "hybrid"] as const) {
     `Stratégie ${focus} : héros +${f.heroes.gainedLaunched}, bâtiments +${f.buildings.gainedLaunched} ` +
       `(${f.buildings.gainedByEnd} finis avant la fin), ouvriers occupés à l'export ${f.busyAtExport}/${f.builderSlots}, ` +
       `potions utiles ${f.heroes.plan.starts.length} (${f.heroes.plan.wasted} à vide)`,
+  );
+}
+
+import { recommendPurchases } from "../src/lib/recommend";
+for (const focus of ["heroes", "buildings", "hybrid"] as const) {
+  const t0 = performance.now();
+  const r = recommendPurchases(v, { ...base, focus, medals: 2500 });
+  console.log(`Achats ${focus} (${Math.round(performance.now() - t0)} ms) : ${r.builder} ouvrier, ${r.research} recherche, ${r.hammers} marteau(x), ${r.medalsUsed} médailles → héros +${r.heroes}, bâtiments +${r.buildings}, labo +${r.lab}. ${r.reason}`);
+}
+
+// Avec une plage de sommeil 23 h - 7 h : relances au réveil seulement.
+for (const focus of ["heroes", "hybrid"] as const) {
+  const t0 = performance.now();
+  const s = { ...base, focus, sleep: { start: 23, end: 7 } };
+  const f = forecast(v, s);
+  const r = recommendPurchases(v, { ...s, medals: 2500 });
+  console.log(
+    `Sommeil ${focus} (${Math.round(performance.now() - t0)} ms) : héros +${f.heroes.gainedLaunched}, bâtiments +${f.buildings.gainedLaunched}, ` +
+      `${Math.round(f.heroes.idleAsleepHours)} h d'ouvrier perdues la nuit ; achats ${r.builder} ouvrier, ${r.research} recherche, ${r.hammers} marteau(x)`,
   );
 }

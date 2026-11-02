@@ -1,9 +1,10 @@
 import { findByName, gameIndex } from "../lib/gamedata";
 import type { Focus, Settings } from "../lib/plan";
-import { GOLD_PASS_STEPS } from "../lib/rules";
+import { GOLD_PASS_STEPS, JAM } from "../lib/rules";
 import { fmtDateTime, toDate } from "../lib/time";
 import type { Village } from "../lib/village";
 import { h } from "./dom";
+import { sleepControl } from "./sleep";
 import { sprite } from "./sprite";
 
 const CHOICES: { focus: Focus; title: string; text: string; icons: [string, string][] }[] = [
@@ -38,6 +39,8 @@ export function onboardingView(opts: {
   village: Village;
   settings: Settings;
   canCancel: boolean;
+  /** Nouvel export : le champ des médailles est vide et obligatoire. */
+  askMedals: boolean;
   onDone: (s: Settings) => void;
   onCancel: () => void;
 }): HTMLElement {
@@ -85,6 +88,19 @@ export function onboardingView(opts: {
     });
     return b;
   });
+  const medals = h("input", {
+    id: "ob-medals",
+    class: "input input-num",
+    type: "number",
+    inputmode: "numeric",
+    min: 0,
+    max: JAM.medalCap,
+    step: 1,
+    required: true,
+    placeholder: opts.askMedals ? `ex. ${opts.settings.medals}` : "",
+    value: opts.askMedals ? "" : String(draft.medals),
+    "aria-describedby": "ob-medals-hint",
+  });
   const goblin = h("input", { type: "checkbox", id: "ob-goblin", class: "checkbox", checked: draft.goblinBuilder });
   goblin.addEventListener("change", () => (draft.goblinBuilder = goblin.checked));
 
@@ -100,6 +116,7 @@ export function onboardingView(opts: {
         class: "onboarding-form",
         onSubmit: (e: Event) => {
           e.preventDefault();
+          draft.medals = Math.min(JAM.medalCap, Math.max(0, Math.floor(Number(medals.value) || 0)));
           opts.onDone(draft);
         },
       },
@@ -110,6 +127,16 @@ export function onboardingView(opts: {
         h("div", { class: "form-row" }, h("span", { class: "form-label", id: "ob-pass" }, "Pass d'or"), h("div", { class: "segmented", role: "radiogroup", "aria-labelledby": "ob-pass" }, passButtons)),
         h("div", { class: "form-row" }, h("span", { class: "form-label", id: "ob-builders" }, "Ouvriers"), h("div", { class: "segmented seg-2", role: "radiogroup", "aria-labelledby": "ob-builders" }, builderButtons)),
         h("div", { class: "field-check" }, goblin, h("label", { for: "ob-goblin" }, "J'ai aussi un ouvrier gobelin")),
+        h(
+          "div",
+          { class: "form-row" },
+          h("label", { class: "form-label", for: "ob-medals" }, "Médailles de ligue sur ton compte"),
+          medals,
+        ),
+        h("p", { class: "hint", id: "ob-medals-hint" }, `Au moment de l'export, ${JAM.medalCap} au plus. Le plan te dira quoi acheter avec.`),
+        sleepControl("ob-sleep", draft.sleep, (sl) => {
+          draft.sleep = sl;
+        }),
       ),
       h(
         "div",

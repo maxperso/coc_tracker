@@ -5,12 +5,14 @@ import { existsSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { parseExport } from "../src/lib/exportParse";
 import { gameIndex } from "../src/lib/gamedata";
-import { DEFAULT_SETTINGS, forecast } from "../src/lib/plan";
+import { DEFAULT_SETTINGS, forecast, type Settings } from "../src/lib/plan";
 import { hoursBetween } from "../src/lib/time";
 import { JAM } from "../src/lib/rules";
 import { buildVillage } from "../src/lib/village";
 
 const path = process.env.COC_EXPORT;
+// Chiffres de référence : chantiers enchaînés sans temps mort, donc sans sommeil (« Chu »).
+const NO_SLEEP: Settings = { ...DEFAULT_SETTINGS, sleep: null };
 const enabled = !!path && existsSync(path);
 
 describe.skipIf(!enabled)("export réel", () => {
@@ -37,7 +39,7 @@ describe.skipIf(!enabled)("export réel", () => {
   it("T = 332,8 h et 34,5 jours par ouvrier avec 55 potions", () => {
     const v = load();
     expect(hoursBetween(v.timestamp, JAM.end)).toBeCloseTo(332.8, 1);
-    const f = forecast(v, DEFAULT_SETTINGS);
+    const f = forecast(v, NO_SLEEP);
     expect(f.heroes.plan.starts).toHaveLength(55);
     expect(f.heroes.capacityHours / 24).toBeCloseTo(34.5, 1);
   });
@@ -48,7 +50,7 @@ describe.skipIf(!enabled)("export réel", () => {
     [0.15, 52],
     [0.2, 52],
   ])("Pass %s : %s niveaux de héros, chantiers en cours inclus", (g, expected) => {
-    const f = forecast(load(), { ...DEFAULT_SETTINGS, pass: { builder: g, research: g } });
+    const f = forecast(load(), { ...NO_SLEEP, pass: { builder: g, research: g } });
     expect(f.heroes.gainedLaunched).toBe(expected);
   });
 });

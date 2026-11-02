@@ -21,7 +21,10 @@ const csp = (): Plugin => ({
 });
 
 export default defineConfig({
-  base: "./",
+  // Chemins absolus : le serveur renvoie index.html pour toutes les routes du site.
+  base: "/",
   plugins: [csp()],
+  // En dev, l'API tourne à part (npm run dev:server) : Vite lui transmet /api.
+  server: { proxy: { "/api": "http://localhost:3000" } },
   test: { include: ["tests/**/*.test.ts"] },
 });

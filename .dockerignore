@@ -1,0 +1,11 @@
+node_modules
+dist
+dist-server
+.git
+.env
+ClashKingAssets
+Suivi Hammer Jam pistes de design-png
+my_village.json
+exports
+*.export.json
+village-export*.json

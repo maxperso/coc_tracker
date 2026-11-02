@@ -2,7 +2,14 @@ import { MAX_EXPORT_CHARS } from "../lib/exportParse";
 import { h } from "./dom";
 import { legalFooter } from "./legal";
 
-export function homeView(opts: { error?: string; onSubmit: (text: string) => void }): HTMLElement {
+export function homeView(opts: {
+  error?: string;
+  onSubmit: (text: string) => void;
+  onPlayers: () => void;
+  /** Présent quand un export existe déjà : retour au tableau sans rien envoyer. */
+  onCancel?: () => void;
+  onLogout: () => void;
+}): HTMLElement {
   const textarea = h("textarea", {
     id: "export-input",
     class: "paste",
@@ -35,7 +42,7 @@ export function homeView(opts: { error?: string; onSubmit: (text: string) => voi
     h(
       "div",
       { class: "paste-actions" },
-      h("p", { id: "paste-note", class: "muted" }, "Ton JSON reste dans ton navigateur."),
+      h("p", { id: "paste-note", class: "muted" }, "Ton export est enregistré sur ton compte : tes potes verront ton avancement."),
       h(
         "div",
         { class: "paste-buttons" },
@@ -63,6 +70,13 @@ export function homeView(opts: { error?: string; onSubmit: (text: string) => voi
         h("li", null, "Va dans Plus de réglages."),
         h("li", null, "En bas, dans Data Export, appuie sur Copier."),
       ),
+    ),
+    h(
+      "div",
+      { class: "button-row center-row" },
+      opts.onCancel ? h("button", { type: "button", class: "btn btn-ghost", onClick: opts.onCancel }, "Retour à mon plan") : null,
+      h("button", { type: "button", class: "btn btn-ghost", onClick: opts.onPlayers }, "Voir les potes"),
+      h("button", { type: "button", class: "btn btn-ghost", onClick: opts.onLogout }, "Se déconnecter"),
     ),
     legalFooter(true),
   );

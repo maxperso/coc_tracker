@@ -111,21 +111,15 @@ export function comparison(v: Village, settings: Settings): HTMLElement {
 export function historyView(p: {
   village: Village;
   history: Snapshot[];
-  storageOk: boolean;
-  onExportHistory: () => void;
-  onImportHistory: (f: File) => void;
 }): HTMLElement {
   const list = p.history;
-  const file = h("input", { type: "file", accept: "application/json,.json", class: "visually-hidden", id: "history-file" });
-  file.addEventListener("change", () => file.files?.[0] && p.onImportHistory(file.files[0]));
   const prev = list.length >= 2 ? list[list.length - 2] : null;
   const cur = list.find((s) => s.timestamp === p.village.timestamp) ?? list.at(-1);
   const gains = prev && cur && prev !== cur ? gainsBetween(prev, cur) : [];
   return h(
     "div",
     null,
-    !p.storageOk ? h("p", { class: "alert" }, "Stockage local indisponible : l'historique ne sera pas gardé.") : null,
-    h("p", { class: "muted" }, `${plural(list.length, "export")} enregistré${list.length > 1 ? "s" : ""}, dans ce navigateur seulement.`),
+    h("p", { class: "muted" }, `${plural(list.length, "export")} enregistré${list.length > 1 ? "s" : ""} sur le serveur.`),
     prev && gains.length
       ? h(
           "div",
@@ -134,13 +128,6 @@ export function historyView(p: {
           h("ul", { class: "rows" }, gains.slice(0, 12).map((g) => h("li", { class: "row row-split" }, h("strong", null, g.name), h("span", { class: "muted" }, `${g.delta > 0 ? "+" : ""}${plural(g.delta, "niveau")}`)))),
         )
       : h("p", { class: "muted" }, "Colle un nouvel export plus tard pour voir tes gains."),
-    h(
-      "div",
-      { class: "button-row" },
-      h("button", { type: "button", class: "btn btn-ghost", onClick: p.onExportHistory }, "Exporter l'historique"),
-      h("label", { for: "history-file", class: "btn btn-ghost" }, "Importer"),
-      file,
-    ),
   );
 }
 

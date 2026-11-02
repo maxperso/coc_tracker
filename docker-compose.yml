@@ -1,0 +1,36 @@
+# Prod : l'app et Postgres. Nginx Proxy Manager fait le HTTPS devant (coc.maxperso.fr → hôte:APP_PORT).
+# Lancement : cp .env.example .env, remplir, puis docker compose up -d --build
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: coc
+      POSTGRES_USER: coc
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?définis POSTGRES_PASSWORD dans .env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U coc -d coc"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  app:
+    build: .
+    image: coc-tracker:latest
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://coc:${POSTGRES_PASSWORD}@db:5432/coc
+      JWT_SECRET: ${JWT_SECRET:?définis JWT_SECRET dans .env}
+      INVITE_CODE: ${INVITE_CODE:?définis INVITE_CODE dans .env}
+      APP_ORIGIN: ${APP_ORIGIN:-https://coc.maxperso.fr}
+      COOKIE_SECURE: ${COOKIE_SECURE:-true}
+    ports:
+      - "${APP_PORT:-3000}:3000"
+
+volumes:
+  pgdata:

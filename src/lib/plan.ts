@@ -29,7 +29,11 @@ export interface Settings {
     pet: { owned: number; purchases: number };
   };
   heroHammers: number;
+  /** Médailles de ligue sur le compte au moment de l'export. */
   medals: number;
+  /** Achats de potions et marteaux calculés à partir des médailles (sinon : saisis à la main). */
+  autoPurchases: boolean;
+  /** Plage de sommeil (heure de Paris) ; null = « Chu », je ne dors pas. */
   sleep: Sleep | null;
   /** Prendre en compte les bâtiments en cours dans l'export (ils occupent un ouvrier). */
   countBuildingTimers: boolean;
@@ -48,7 +52,8 @@ export const DEFAULT_SETTINGS: Settings = {
   },
   heroHammers: 0,
   medals: 2500,
-  sleep: null,
+  autoPurchases: true,
+  sleep: { start: 23, end: 7 },
   countBuildingTimers: true,
 };
 
@@ -215,7 +220,10 @@ export function builderChains(v: Village, s: Settings): { heroes: Chain[]; build
   return { heroes, buildings, other: guardianChains(v) };
 }
 
-export function forecast(v: Village, s: Settings, cfg: JamConfig = JAM): Forecast {
+export type BuilderForecast = Pick<Forecast, "heroes" | "buildings" | "builderSlots" | "busyAtExport">;
+
+/** Pool des ouvriers seul : sert aux recherches rapides (recommandation d'achats). */
+export function builderForecast(v: Village, s: Settings, cfg: JamConfig = JAM): BuilderForecast {
   const { heroes, buildings, other } = builderChains(v, s);
   const builderSlots = s.builders + (s.goblinBuilder ? 1 : 0);
   const tHours = hoursBetween(v.timestamp, cfg.end);
@@ -228,15 +236,25 @@ export function forecast(v: Village, s: Settings, cfg: JamConfig = JAM): Forecas
     return { ...pool, results, ...gains(results, tHours) };
   };
 
-  const labSlots = 1 + (s.goblinResearcher ? 1 : 0);
-  const lab = labChains(v);
   return {
     heroes: subset(heroes),
     buildings: subset(buildings),
     builderSlots,
     busyAtExport: [...heroes, ...buildings, ...other].filter((c) => c.inProgress).length,
-    labBest: runPool(v, s, lab, labSlots, s.potions.research, cfg.potions.research.extraHours, "shortest", [], cfg),
-    labWorst: runPool(v, s, lab, labSlots, s.potions.research, cfg.potions.research.extraHours, "longest", [], cfg),
+  };
+}
+
+/** Labo, ordre « plus courtes d'abord » (le plus de niveaux) ou « plus longues d'abord ». */
+export function labForecast(v: Village, s: Settings, policy: Policy = "shortest", cfg: JamConfig = JAM): PoolForecast {
+  const labSlots = 1 + (s.goblinResearcher ? 1 : 0);
+  return runPool(v, s, labChains(v), labSlots, s.potions.research, cfg.potions.research.extraHours, policy, [], cfg);
+}
+
+export function forecast(v: Village, s: Settings, cfg: JamConfig = JAM): Forecast {
+  return {
+    ...builderForecast(v, s, cfg),
+    labBest: labForecast(v, s, "shortest", cfg),
+    labWorst: labForecast(v, s, "longest", cfg),
     pets: runPool(v, s, petChains(v), 1, s.potions.pet, cfg.potions.pet.extraHours, "shortest", [], cfg),
   };
 }

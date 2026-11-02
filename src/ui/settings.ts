@@ -1,6 +1,7 @@
 import type { Settings } from "../lib/plan";
 import { GOLD_PASS_STEPS, JAM } from "../lib/rules";
 import { h, nf } from "./dom";
+import { sleepControl } from "./sleep";
 
 type Update = (next: Settings) => void;
 
@@ -42,15 +43,20 @@ const field = (id: string, label: string, control: HTMLElement, hint?: string) =
 const checkField = (id: string, label: string, control: HTMLElement, hint?: string) =>
   h("div", { class: "field field-check" }, control, h("label", { for: id }, label, hint ? h("span", { class: "hint" }, hint) : null));
 
-export function settingsDialog(s: Settings, same: boolean, onChange: Update, onSame: (v: boolean) => void): HTMLDialogElement {
+/** `effective` : réglages réellement utilisés (achats recommandés si le mode automatique est actif). */
+export function settingsDialog(s: Settings, effective: Settings, same: boolean, onChange: Update, onSame: (v: boolean) => void): HTMLDialogElement {
   const set = (patch: (d: Settings) => void) => {
     const next = structuredClone(s);
     patch(next);
     onChange(next);
   };
   const passOptions = GOLD_PASS_STEPS.map((g) => [g, passLabel(g)] as [number, string]);
-  const hours = Array.from({ length: 24 }, (_, i) => [i, `${i} h`] as [number, string]);
-  const spent = medalsSpent(s);
+  const spent = medalsSpent(effective);
+  const auto = s.autoPurchases;
+  const lock = (el: HTMLInputElement) => {
+    if (auto) el.disabled = true;
+    return el;
+  };
 
   const dlg = h(
     "dialog",
@@ -77,32 +83,33 @@ export function settingsDialog(s: Settings, same: boolean, onChange: Update, onS
       h("fieldset", null, h("legend", null, "Potions"),
         h("div", { class: "grid-2" },
           field("p-b-own", "Ouvrier en stock", num("p-b-own", s.potions.builder.owned, 0, JAM.potions.maxStock, (v) => set((d) => { d.potions.builder.owned = v; }))),
-          field("p-b-buy", "Ouvrier à racheter", num("p-b-buy", s.potions.builder.purchases, 0, 200, (v) => set((d) => { d.potions.builder.purchases = v; }))),
+          field("p-b-buy", "Ouvrier à racheter", lock(num("p-b-buy", effective.potions.builder.purchases, 0, 200, (v) => set((d) => { d.potions.builder.purchases = v; })))),
           field("p-r-own", "Recherche en stock", num("p-r-own", s.potions.research.owned, 0, JAM.potions.maxStock, (v) => set((d) => { d.potions.research.owned = v; }))),
-          field("p-r-buy", "Recherche à racheter", num("p-r-buy", s.potions.research.purchases, 0, 200, (v) => set((d) => { d.potions.research.purchases = v; }))),
+          field("p-r-buy", "Recherche à racheter", lock(num("p-r-buy", effective.potions.research.purchases, 0, 200, (v) => set((d) => { d.potions.research.purchases = v; })))),
           field("p-p-own", "Animaux en stock", num("p-p-own", s.potions.pet.owned, 0, JAM.potions.maxStock, (v) => set((d) => { d.potions.pet.owned = v; }))),
           field("p-p-buy", "Animaux à obtenir", num("p-p-buy", s.potions.pet.purchases, 0, 50, (v) => set((d) => { d.potions.pet.purchases = v; })), "Non vendue en médailles."),
         ),
-        field("hammers", "Marteaux de héros", num("hammers", s.heroHammers, 0, 3, (v) => set((d) => { d.heroHammers = v; })), "Un tous les 7 jours au plus. Hypothèse : finit le chantier de héros le plus long."),
+        field("hammers", "Marteaux de héros", lock(num("hammers", effective.heroHammers, 0, 3, (v) => set((d) => { d.heroHammers = v; }))), "Un tous les 7 jours au plus. Hypothèse : finit le chantier de héros le plus long."),
         h("p", { class: "hint" }, `Stock max : ${JAM.potions.maxStock} de chaque. Les rachats se font au moment de boire.`),
       ),
 
       h("fieldset", null, h("legend", null, "Médailles de ligue"),
-        field("medals", "Médailles disponibles", num("medals", s.medals, 0, JAM.medalCap, (v) => set((d) => { d.medals = v; }))),
+        field("medals", "Médailles sur ton compte", num("medals", s.medals, 0, JAM.medalCap, (v) => set((d) => { d.medals = v; }))),
+        checkField("auto-buy", "Calculer les achats pour moi", check("auto-buy", auto, (v) => set((d) => {
+          d.autoPurchases = v;
+          if (!v) {
+            d.potions.builder.purchases = effective.potions.builder.purchases;
+            d.potions.research.purchases = effective.potions.research.purchases;
+            d.heroHammers = effective.heroHammers;
+          }
+        })), "Potions et marteaux choisis selon ta stratégie. Décoche pour les saisir toi-même."),
         h("p", { class: spent > s.medals ? "hint error" : "hint" },
           `Rachats prévus : ${nf(spent)} médailles sur ${nf(s.medals)}${spent > s.medals ? " : budget dépassé" : ""}. ` +
           `Prix à vérifier en jeu : ouvrier ${JAM.potions.builder.medalPrice}, recherche ${JAM.potions.research.medalPrice}, marteau de héros ${JAM.hammers.heroes.medalPrice}.`),
       ),
 
       h("fieldset", null, h("legend", null, "Sommeil"),
-        checkField("sleep-on", "Je ne relance rien pendant mon sommeil", check("sleep-on", s.sleep != null, (v) => set((d) => { d.sleep = v ? { start: 23, end: 7 } : null; }))),
-        s.sleep
-          ? h("div", { class: "grid-2" },
-              field("sleep-start", "Coucher", select("sleep-start", s.sleep.start, hours, (v) => set((d) => { d.sleep!.start = v; }))),
-              field("sleep-end", "Réveil", select("sleep-end", s.sleep.end, hours, (v) => set((d) => { d.sleep!.end = v; }))),
-            )
-          : null,
-        h("p", { class: "hint" }, "Heure de Paris. Les potions sont bues au réveil, ou à 9 h sans plage de sommeil."),
+        sleepControl("set-sleep", s.sleep, (sl) => set((d) => { d.sleep = sl; })),
       ),
     ),
   );
