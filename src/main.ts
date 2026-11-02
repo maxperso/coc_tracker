@@ -12,6 +12,7 @@ import { snapshotOf, type Snapshot } from "./lib/history";
 import demoExport from "./data/demo.json";
 import { DEFAULT_SETTINGS, type Settings } from "./lib/plan";
 import { effectiveSettings } from "./lib/recommend";
+import { canInstall, disablePush, enablePush, install, isIos, isStandalone, onPwaChange, pushState, registerServiceWorker, type PushState } from "./lib/pwa";
 import { applyTheme, loadTheme, saveTheme, type ThemePref } from "./lib/theme";
 import { buildVillage, type Village } from "./lib/village";
 import { authView, type AuthMode, type AuthState } from "./ui/auth";
@@ -29,6 +30,8 @@ type View = "loading" | "landing" | "auth" | "home" | "onboarding" | "dash" | "p
 interface Loaded {
   village: Village;
   history: Snapshot[];
+  /** Actions du plan cochées « fait » pour cet export. */
+  checks: Set<string>;
 }
 
 const state: {
@@ -69,6 +72,14 @@ function setTheme(t: ThemePref) {
 }
 
 const root = document.getElementById("app")!;
+
+registerServiceWorker();
+let push: PushState | "loading" = "loading";
+async function refreshPush() {
+  push = await pushState().catch(() => "unsupported" as const);
+  if (state.view === "dash" || state.view === "profile") render();
+}
+onPwaChange(() => void refreshPush());
 let dialog: HTMLDialogElement | null = null;
 
 /** Recommandation d'achats mise en cache : elle ne change qu'avec l'export ou les réglages. */
@@ -91,7 +102,10 @@ function loadProfile(p: PlayerProfile): Loaded | null {
     return r.ok ? [buildVillage(r.value, gameIndex())] : [];
   });
   const village = villages.at(-1);
-  return village ? { village, history: villages.map(snapshotOf) } : null;
+  if (!village) return null;
+  // Les coches ne valent que pour l'export auquel elles se rapportent.
+  const checks = new Set(p.checks && p.checks.exportAt === village.timestamp ? p.checks.keys : []);
+  return { village, history: villages.map(snapshotOf), checks };
 }
 
 /** Session expirée : retour à l'écran de connexion. */
@@ -110,8 +124,9 @@ async function loadMine(): Promise<void> {
   state.settings = settings;
   state.mine = loadProfile(profile);
   state.view = state.mine ? "dash" : "home";
-  // Le classement sert aussi au dashboard : chargé en fond.
+  // Le classement sert aussi au dashboard : chargé en fond, comme l'état des rappels.
   void loadPlayers();
+  void refreshPush();
 }
 
 async function boot(): Promise<void> {
@@ -148,7 +163,7 @@ function openDemo() {
   const r = parseExport(JSON.stringify(demoExport));
   if (!r.ok) return;
   const village = buildVillage(r.value, gameIndex());
-  state.friend = { village, history: [snapshotOf(village)], username: "Démo", settings: { ...structuredClone(DEFAULT_SETTINGS), focus: "hybrid" }, demo: true };
+  state.friend = { village, history: [snapshotOf(village)], checks: new Set(), username: "Démo", settings: { ...structuredClone(DEFAULT_SETTINGS), focus: "hybrid" }, demo: true };
   state.friendTab = "summary";
   state.view = "profile";
   render();
@@ -256,6 +271,29 @@ function setSettings(next: Settings, immediate = false): Promise<void> {
   if (immediate) return save();
   saveTimer = setTimeout(save, 600);
   return Promise.resolve();
+}
+
+let checksTimer: ReturnType<typeof setTimeout> | undefined;
+/** Coche « fait » : enregistrée sur le serveur un instant plus tard, sans redessiner la page. */
+function toggleCheck(key: string, done: boolean) {
+  const mine = state.mine;
+  if (!mine) return;
+  if (done) mine.checks.add(key);
+  else mine.checks.delete(key);
+  clearTimeout(checksTimer);
+  checksTimer = setTimeout(() => {
+    api.saveChecks({ exportAt: mine.village.timestamp, keys: [...mine.checks] }).catch((e) => void handleError(e));
+  }, 500);
+}
+
+async function togglePush(enable: boolean) {
+  try {
+    push = enable ? await enablePush() : await disablePush();
+    if (enable && push === "on") await api.pushTest().catch(() => {});
+  } catch {
+    push = await pushState().catch(() => "unsupported" as const);
+  }
+  render();
 }
 
 async function loadPlayers() {
@@ -461,6 +499,17 @@ function renderView(): void {
     onLogoutAll: () => void logout(true),
     theme,
     onTheme: setTheme,
+    checks: loaded.checks,
+    onCheck: friend ? undefined : toggleCheck,
+    push,
+    onPush: (enable) => void togglePush(enable),
+    onPushTest: () => void api.pushTest().catch((e) => void handleError(e)),
+    install: { available: canInstall(), ios: isIos(), standalone: isStandalone() },
+    onInstall: () => void install().then(() => render()),
+    compare:
+      friend && !friend.demo && state.mine && state.me
+        ? { me: state.me, village: state.mine.village, settings: effective(state.mine.village, state.settings).settings }
+        : undefined,
   });
   for (const d of view.querySelectorAll("details")) {
     if (openDetails.has(d.querySelector("h2")?.textContent ?? "")) d.open = true;

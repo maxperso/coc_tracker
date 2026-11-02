@@ -1,4 +1,4 @@
-import type { AuthConfigResponse, MeResponse, PendingResponse, PlayerProfile, PlayerRow } from "./api";
+import type { AuthConfigResponse, MeResponse, PendingResponse, PlanChecks, PlayerProfile, PlayerRow, PushConfigResponse } from "./api";
 import type { Settings } from "./plan";
 
 export class ApiError extends Error {
@@ -46,4 +46,9 @@ export const api = {
   uploadExport: (text: string) => call<{ ok: true }>("POST", "/api/exports", { text }),
   players: () => call<PlayerRow[]>("GET", "/api/players"),
   profile: (username: string) => call<PlayerProfile>("GET", `/api/players/${encodeURIComponent(username)}`),
+  saveChecks: (c: PlanChecks) => call<PlanChecks>("PUT", "/api/me/checks", c),
+  pushConfig: () => call<PushConfigResponse>("GET", "/api/push/config"),
+  pushSubscribe: (sub: { endpoint: string; keys: { p256dh: string; auth: string } }) => call<{ ok: true }>("POST", "/api/push/subscribe", sub),
+  pushUnsubscribe: (endpoint: string) => call<{ ok: true }>("POST", "/api/push/unsubscribe", { endpoint }),
+  pushTest: () => call<{ sent: number }>("POST", "/api/push/test", {}),
 };

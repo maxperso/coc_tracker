@@ -71,6 +71,20 @@ oublié. Reprends les réglages SMTP de WordPress (WP Mail SMTP, Post SMTP…) :
 Si ton WordPress envoie via une API (Gmail OAuth, Brevo API…) et non en SMTP, crée plutôt des
 identifiants SMTP chez le même fournisseur. Sans SMTP, l'app refuse de démarrer en production.
 
+### Rappels (notifications push)
+
+Le serveur envoie une notification à chaque relance prévue (chantier fini, potions), au réveil si
+le joueur dort, et un rappel de recoller l'export 24 h après. Il faut une paire de clés VAPID :
+
+```bash
+docker compose build && docker run --rm --entrypoint npx coc-tracker:latest web-push generate-vapid-keys
+# copie « Public Key » dans VAPID_PUBLIC_KEY et « Private Key » dans VAPID_PRIVATE_KEY (.env)
+docker compose up -d
+```
+
+Ne change plus ces clés ensuite : les appareils abonnés devraient se réabonner. Chaque joueur active
+les rappels dans *Mon compte* (sur iPhone, après avoir installé le site sur l'écran d'accueil).
+
 ### Administration
 
 ```bash

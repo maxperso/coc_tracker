@@ -8,6 +8,7 @@ import { buildApp } from "../server/app";
 import { loadConfig } from "../server/config";
 import { createPool, migrate, type Db } from "../server/db";
 import type { Mail } from "../server/mailer";
+import { isAllowedEndpoint, rebuildQueue, sendDue, type PushSubscriptionRow } from "../server/push";
 import { DEFAULT_SETTINGS } from "../src/lib/plan";
 
 const url = process.env.DATABASE_URL_TEST;
@@ -20,6 +21,15 @@ describe.skipIf(!url)("API", () => {
   let db: Db;
   let app: FastifyInstance;
   const sent: Mail[] = [];
+  const pushed: { endpoint: string; payload: { title: string; body: string } }[] = [];
+  /** Faux service push : enregistre les envois ; un endpoint contenant « gone » est expiré. */
+  const fakePush = {
+    send: async (sub: PushSubscriptionRow, payload: string) => {
+      if (sub.endpoint.includes("gone")) return "gone" as const;
+      pushed.push({ endpoint: sub.endpoint, payload: JSON.parse(payload) });
+      return "ok" as const;
+    },
+  };
   // Une IP publique différente par appel, pour ne pas déclencher la limite de tentatives entre tests.
   let n = 0;
   const ip = () => `198.51.100.${(n++ % 250) + 1}`;
@@ -35,8 +45,10 @@ describe.skipIf(!url)("API", () => {
       INVITE_CODE: INVITE,
       APP_ORIGIN: ORIGIN,
       COOKIE_SECURE: "true",
+      VAPID_PUBLIC_KEY: "cle-publique-de-test",
+      VAPID_PRIVATE_KEY: "cle-privee-de-test",
     });
-    app = await buildApp(cfg, db, { send: async (m) => void sent.push(m) });
+    app = await buildApp(cfg, db, { send: async (m) => void sent.push(m) }, fakePush);
   });
   afterAll(async () => {
     await app?.close();
@@ -245,6 +257,72 @@ describe.skipIf(!url)("API", () => {
       expect(p.username).toBe("Alice");
       expect(p.exports).toHaveLength(1);
       expect((await req({ url: "/api/players/bruteforce", cookie: carol })).statusCode).toBe(404);
+    });
+  });
+
+  describe("plan coché et notifications", () => {
+    let dan = "";
+    const sub = (endpoint: string) => ({ endpoint, keys: { p256dh: "BCdefghijklmnopqrstuvwxyz0123456789", auth: "authkey1234" } });
+
+    beforeAll(async () => {
+      dan = await signup("dan", "dan@example.test");
+      // Export récent : la fin du Jam est loin, il reste des rappels à venir.
+      const recent = JSON.stringify({ ...JSON.parse(fixture), tag: "#ANON0009", timestamp: Math.floor(Date.now() / 1000) - 600 });
+      expect((await post("/api/exports", { text: recent }, dan)).statusCode).toBe(201);
+    });
+
+    it("enregistre les coches et les montre aux amis", async () => {
+      const bad = await req({ method: "PUT", url: "/api/me/checks", cookie: dan, payload: { exportAt: 1, keys: ["x".repeat(500)] } });
+      expect(bad.statusCode).toBe(400);
+      const ok = await req({ method: "PUT", url: "/api/me/checks", cookie: dan, payload: { exportAt: 1793617920, keys: ["L:a:2", "L:a:2", "P:builder:2026-11-02"] } });
+      expect(ok.json()).toEqual({ exportAt: 1793617920, keys: ["L:a:2", "P:builder:2026-11-02"] });
+      const erin = await signup("erin", "erin@example.test");
+      expect((await req({ url: "/api/players/dan", cookie: erin })).json().checks.keys).toHaveLength(2);
+    });
+
+    it("n'accepte que les services push connus", async () => {
+      expect(isAllowedEndpoint("https://fcm.googleapis.com/fcm/send/abc")).toBe(true);
+      expect(isAllowedEndpoint("https://web.push.apple.com/abc")).toBe(true);
+      expect(isAllowedEndpoint("https://169.254.169.254/latest")).toBe(false);
+      expect(isAllowedEndpoint("http://fcm.googleapis.com/x")).toBe(false);
+      expect(isAllowedEndpoint("https://fcm.googleapis.com:8443/x")).toBe(false);
+      const res = await post("/api/push/subscribe", sub("https://intranet.example/hook"), dan);
+      expect(res.statusCode).toBe(400);
+    });
+
+    it("s'abonne, calcule les rappels et envoie ceux arrivés à échéance", async () => {
+      expect((await req({ url: "/api/push/config" })).json()).toEqual({ enabled: true, publicKey: "cle-publique-de-test" });
+      expect((await post("/api/push/subscribe", sub("https://fcm.googleapis.com/fcm/send/dan1"), dan)).statusCode).toBe(201);
+      const { rows: u } = await db.query("select id from users where username = 'dan'");
+      const n = await rebuildQueue(db, Number(u[0].id));
+      expect(n).toBeGreaterThan(5);
+      const { rows: q } = await db.query("select key, title, body from push_queue where user_id = $1 order by send_at", [u[0].id]);
+      expect(q.some((r) => r.key === "export")).toBe(true);
+      expect(q[0].body).toMatch(/Relance|Bois/);
+
+      // Le premier rappel arrive maintenant ; un rappel très en retard est abandonné.
+      await db.query("update push_queue set send_at = now() - interval '1 minute' where user_id = $1 and key = $2", [u[0].id, q[0].key]);
+      await db.query("update push_queue set send_at = now() - interval '2 hours' where user_id = $1 and key = $2", [u[0].id, q[1].key]);
+      pushed.length = 0;
+      expect(await sendDue(db, fakePush)).toBe(1);
+      expect(pushed[0].payload.title).toBe(q[0].title);
+      expect(await sendDue(db, fakePush)).toBe(0);
+    });
+
+    it("supprime un abonnement expiré et teste l'envoi", async () => {
+      await post("/api/push/subscribe", sub("https://fcm.googleapis.com/fcm/send/gone-1"), dan);
+      const res = await post("/api/push/test", {}, dan);
+      expect(res.json()).toEqual({ sent: 1 });
+      const { rows } = await db.query("select endpoint from push_subscriptions");
+      expect(rows.map((r) => r.endpoint)).toEqual(["https://fcm.googleapis.com/fcm/send/dan1"]);
+    });
+
+    it("se désabonne : plus aucun rappel en attente", async () => {
+      await post("/api/push/unsubscribe", { endpoint: "https://fcm.googleapis.com/fcm/send/dan1" }, dan);
+      const { rows: u } = await db.query("select id from users where username = 'dan'");
+      expect(await rebuildQueue(db, Number(u[0].id))).toBe(0);
+      const { rows } = await db.query("select count(*)::int as n from push_queue where user_id = $1 and sent_at is null", [u[0].id]);
+      expect(rows[0].n).toBe(0);
     });
   });
 });

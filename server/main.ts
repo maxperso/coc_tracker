@@ -2,6 +2,7 @@ import { buildApp } from "./app";
 import { loadConfig } from "./config";
 import { createPool, migrate } from "./db";
 import { consoleMailer, smtpMailer } from "./mailer";
+import { startScheduler, webPushSender } from "./push";
 
 const cfg = loadConfig();
 const db = createPool(cfg.databaseUrl);
@@ -31,11 +32,16 @@ if (smtp) {
   console.warn("Pas de SMTP configuré : les emails sont écrits dans les logs (dev).");
 }
 
-const app = await buildApp(cfg, db, mailer);
+const push = cfg.vapid ? webPushSender(cfg.vapid) : null;
+if (!push) console.warn("Pas de clés VAPID : les notifications push sont désactivées.");
+
+const app = await buildApp(cfg, db, mailer, push);
 await app.listen({ port: cfg.port, host: cfg.host });
+const stopScheduler = push ? startScheduler(db, push, (msg, err) => app.log.error({ err }, msg)) : () => {};
 
 for (const sig of ["SIGINT", "SIGTERM"] as const) {
   process.on(sig, async () => {
+    stopScheduler();
     await app.close();
     await db.end();
     process.exit(0);
