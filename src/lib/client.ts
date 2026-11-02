@@ -13,7 +13,8 @@ export class ApiError extends Error {
   }
 }
 
-async function call<T>(method: string, url: string, body?: unknown): Promise<T> {
+/** `keepalive` : l'envoi se termine même si la page passe en arrière-plan ou se ferme. */
+async function call<T>(method: string, url: string, body?: unknown, keepalive = false): Promise<T> {
   let res: Response;
   try {
     res = await fetch(url, {
@@ -21,6 +22,7 @@ async function call<T>(method: string, url: string, body?: unknown): Promise<T> 
       credentials: "same-origin",
       headers: body === undefined ? undefined : { "Content-Type": "application/json" },
       body: body === undefined ? undefined : JSON.stringify(body),
+      keepalive,
     });
   } catch {
     throw new ApiError("Serveur injoignable. Vérifie ta connexion.", 0);
@@ -43,11 +45,11 @@ export const api = {
   logout: () => call<{ ok: true }>("POST", "/api/auth/logout"),
   logoutAll: () => call<{ ok: true }>("POST", "/api/auth/logout-all"),
   settings: () => call<Settings>("GET", "/api/me/settings"),
-  saveSettings: (s: Settings) => call<Settings>("PUT", "/api/me/settings", s),
+  saveSettings: (s: Settings, keepalive = false) => call<Settings>("PUT", "/api/me/settings", s, keepalive),
   uploadExport: (text: string) => call<{ ok: true }>("POST", "/api/exports", { text }),
   players: () => call<PlayerRow[]>("GET", "/api/players"),
   profile: (username: string) => call<PlayerProfile>("GET", `/api/players/${encodeURIComponent(username)}`),
-  saveChecks: (c: PlanChecks) => call<PlanChecks>("PUT", "/api/me/checks", c),
+  saveChecks: (c: PlanChecks, keepalive = false) => call<PlanChecks>("PUT", "/api/me/checks", c, keepalive),
   pushConfig: () => call<PushConfigResponse>("GET", "/api/push/config"),
   pushSubscribe: (sub: { endpoint: string; keys: { p256dh: string; auth: string } }) => call<{ ok: true }>("POST", "/api/push/subscribe", sub),
   pushUnsubscribe: (endpoint: string) => call<{ ok: true }>("POST", "/api/push/unsubscribe", { endpoint }),

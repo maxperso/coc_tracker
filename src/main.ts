@@ -4,8 +4,9 @@ import "@fontsource/inter/latin-600.css";
 import "@fontsource/inter/latin-700.css";
 import "./styles.css";
 
-import type { PlayerProfile, PlayerRow } from "./lib/api";
+import type { PlanChecks, PlayerProfile, PlayerRow } from "./lib/api";
 import type { BacklogItem } from "./lib/backlog";
+import { createSaver } from "./lib/saver";
 import { api, ApiError } from "./lib/client";
 import { parseExport } from "./lib/exportParse";
 import { gameIndex } from "./lib/gamedata";
@@ -265,30 +266,68 @@ async function submitExport(text: string) {
   window.scrollTo(0, 0);
 }
 
-let saveTimer: ReturnType<typeof setTimeout> | undefined;
-/** Réglages : affichés tout de suite, enregistrés sur le serveur un instant plus tard. */
-function setSettings(next: Settings, immediate = false): Promise<void> {
-  state.settings = next;
-  render();
-  clearTimeout(saveTimer);
-  const save = () => api.saveSettings(next).then(() => {}, (e) => void handleError(e));
-  if (immediate) return save();
-  saveTimer = setTimeout(save, 600);
-  return Promise.resolve();
+/** Message bref en bas de l'écran (enregistrement raté…). */
+let toastTimer: ReturnType<typeof setTimeout> | undefined;
+function toast(text: string) {
+  let el = document.querySelector<HTMLElement>(".toast");
+  if (!el) {
+    el = h("div", { class: "toast", role: "status", "aria-live": "polite" });
+    document.body.append(el);
+  }
+  el.textContent = text;
+  el.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el!.classList.remove("show"), 6000);
 }
 
-let checksTimer: ReturnType<typeof setTimeout> | undefined;
-/** Coche « fait » : enregistrée sur le serveur un instant plus tard, sans redessiner la page. */
+/** Envoi raté : session expirée → connexion ; sinon on prévient, l'état est renvoyé plus tard. */
+function saveFailed(what: string) {
+  return (e: unknown) => {
+    const msg = handleError(e);
+    if (!(e instanceof ApiError && e.status === 401)) toast(`${what} (${msg}). Nouvel essai automatique.`);
+  };
+}
+
+/** Réglages : affichés tout de suite ; la saisie rapide est regroupée (600 ms) avant l'envoi. */
+const settingsSaver = createSaver<Settings>({
+  send: (s, keepalive) => api.saveSettings(s, keepalive),
+  onError: saveFailed("Réglages pas encore enregistrés"),
+  delayMs: 600,
+});
+
+function setSettings(next: Settings, immediate = false): void {
+  state.settings = next;
+  render();
+  settingsSaver.save(next);
+  if (immediate) settingsSaver.flush();
+}
+
+/** Coches « fait » : envoyées tout de suite, sans redessiner la page. */
+const checksSaver = createSaver<PlanChecks>({
+  send: (c, keepalive) => api.saveChecks(c, keepalive),
+  onError: saveFailed("Coches pas encore enregistrées"),
+});
+
 function toggleCheck(key: string, done: boolean) {
   const mine = state.mine;
   if (!mine) return;
   if (done) mine.checks.add(key);
   else mine.checks.delete(key);
-  clearTimeout(checksTimer);
-  checksTimer = setTimeout(() => {
-    api.saveChecks({ exportAt: mine.village.timestamp, keys: [...mine.checks] }).catch((e) => void handleError(e));
-  }, 500);
+  checksSaver.save({ exportAt: mine.village.timestamp, keys: [...mine.checks] });
 }
+
+// Sur téléphone, on coche puis on repart aussitôt dans le jeu : tout part avant la mise en pause de l'app.
+const flushAll = () => {
+  settingsSaver.flush();
+  checksSaver.flush();
+};
+const retryAll = () => {
+  settingsSaver.retry();
+  checksSaver.retry();
+};
+document.addEventListener("visibilitychange", () => (document.visibilityState === "hidden" ? flushAll() : retryAll()));
+window.addEventListener("pagehide", flushAll);
+window.addEventListener("online", retryAll);
 
 async function togglePush(enable: boolean) {
   try {
@@ -534,7 +573,7 @@ function renderView(): void {
             state.view = "dash";
             // Premier passage en « Perso » : on montre l'ordre à régler.
             state.tab = next.focus === "custom" && state.settings.focus !== "custom" ? "order" : "summary";
-            void setSettings(next, true);
+            setSettings(next, true);
             window.scrollTo(0, 0);
           },
           onCancel: () => ((state.view = "dash"), render()),
@@ -583,8 +622,8 @@ function renderView(): void {
       render();
       window.scrollTo(0, 0);
     },
-    onFocus: (focus) => void setSettings({ ...state.settings, focus }, true),
-    onOrder: (order) => void setSettings({ ...state.settings, focus: "custom", order }),
+    onFocus: (focus) => setSettings({ ...state.settings, focus }, true),
+    onOrder: (order) => setSettings({ ...state.settings, focus: "custom", order }),
     onSettings: () => dialog?.showModal(),
     onNewExport: () => ((state.view = "home"), render()),
     onOpenPlayer: (u) => void openPlayer(u),
@@ -621,7 +660,7 @@ function renderView(): void {
     state.settings,
     eff.settings,
     state.samePass,
-    (s) => void setSettings(s),
+    (s) => setSettings(s),
     (same) => {
       state.samePass = same;
     },
