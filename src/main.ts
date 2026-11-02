@@ -485,6 +485,7 @@ function renderView(): void {
       render();
       window.scrollTo(0, 0);
     },
+    onFocus: (focus) => void setSettings({ ...state.settings, focus }, true),
     onSettings: () => dialog?.showModal(),
     onNewExport: () => ((state.view = "home"), render()),
     onOpenPlayer: (u) => void openPlayer(u),

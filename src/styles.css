@@ -284,21 +284,8 @@ p {
   color: var(--on-primary);
 }
 
-.btn-ghost:hover,
-.btn-chip:hover {
+.btn-ghost:hover {
   background: var(--soft);
-}
-
-.btn-chip {
-  border-radius: 999px;
-  font-weight: 600;
-}
-
-.chip-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--done);
 }
 
 .link {
@@ -643,6 +630,61 @@ summary:focus-visible,
 
 .strategy strong {
   color: var(--text);
+}
+
+.strategy {
+  padding: 8px 16px 8px 8px;
+}
+
+.focus-switch {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.focus-switch-label {
+  padding-left: 8px;
+  color: var(--text);
+  font-weight: 700;
+}
+
+.focus-switch .segmented {
+  min-width: 0;
+  background: var(--bg);
+}
+
+.focus-switch .seg-btn[aria-checked="true"] {
+  background: var(--done-tint);
+  border-color: var(--done);
+}
+
+.focus-switch .seg-btn:disabled {
+  color: var(--muted);
+  cursor: default;
+}
+
+.strategy-meta {
+  flex: 1;
+  min-width: 0;
+}
+
+@media (max-width: 640px) {
+  .strategy {
+    padding: 8px;
+  }
+
+  .focus-switch,
+  .strategy-meta {
+    width: 100%;
+  }
+
+  .focus-switch .segmented {
+    flex: 1;
+  }
+
+  .strategy-meta {
+    padding: 0 8px;
+  }
 }
 
 .tiles {
@@ -1593,14 +1635,6 @@ legend {
   gap: 12px;
 }
 
-.chip-static {
-  cursor: default;
-}
-
-.chip-static:hover {
-  background: var(--bg);
-}
-
 .players {
   list-style: none;
   margin: 0;
@@ -2087,10 +2121,6 @@ legend {
   border-bottom-color: var(--friend);
 }
 
-.viewing-friend .chip-dot {
-  background: var(--friend);
-}
-
 @media (max-width: 640px) {
   .friend-ro {
     display: none;
@@ -2131,8 +2161,20 @@ legend {
   display: flex;
   flex: 1;
   justify-content: center;
+  justify-content: safe center;
   gap: 4px;
   min-width: 0;
+  /* Filet de sécurité : jamais de chevauchement avec les boutons, au pire on fait défiler. */
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.topnav::-webkit-scrollbar {
+  display: none;
+}
+
+.brand {
+  flex: 0 1 auto;
 }
 
 .topnav-item {
@@ -2201,7 +2243,22 @@ legend {
   outline-offset: 2px;
 }
 
-@media (max-width: 1099px) {
+/* Réglages : icône seule partout, l'infobulle donne le nom. */
+.icon-only .btn-icon-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+}
+
+.btn-icon.icon-only {
+  width: 44px;
+  padding: 0;
+}
+
+/* En dessous de la largeur maximale, « Nouvel export » passe aussi en icône seule. */
+@media (max-width: 1199px) {
   .btn-icon-label {
     position: absolute;
     width: 1px;
@@ -2216,7 +2273,7 @@ legend {
   }
 }
 
-@media (max-width: 899px) {
+@media (max-width: 1023px) {
   .topnav {
     display: none;
   }
@@ -2266,10 +2323,6 @@ legend {
 }
 
 @media (max-width: 480px) {
-  .appbar-actions .btn-chip {
-    padding: 0 12px;
-  }
-
   .brand-meta {
     display: none;
   }

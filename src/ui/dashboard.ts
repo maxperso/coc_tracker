@@ -2,7 +2,7 @@ import { GROUP_LABEL, groupOf, isPermanentBuilding, priorityRank, type BuildingG
 import { displayName, findByName, gameIndex, maxLevel, type Entry } from "../lib/gamedata";
 import type { PlayerRow } from "../lib/api";
 import type { Snapshot } from "../lib/history";
-import { FOCUS_LABEL, forecast, heroLabel, wallSummary, type Forecast, type PoolForecast, type Settings } from "../lib/plan";
+import { FOCUS_LABEL, forecast, heroLabel, wallSummary, type Focus, type Forecast, type PoolForecast, type Settings } from "../lib/plan";
 import { globalPct, pct, progress, progressCurve } from "../lib/progress";
 import type { Purchase } from "../lib/recommend";
 import { JAM } from "../lib/rules";
@@ -62,6 +62,8 @@ export interface DashboardProps {
   tab: Tab;
   onTab: (t: Tab) => void;
   onStrategy: () => void;
+  /** Change de plan (héros, bâtiments, hybride) depuis le dashboard. */
+  onFocus: (f: Focus) => void;
   onSettings: () => void;
   onNewExport: () => void;
   onOpenPlayer: (username: string) => void;
@@ -159,15 +161,13 @@ function appHeader(p: DashboardProps): HTMLElement {
         ? h(
             "div",
             { class: "appbar-actions" },
-            h("span", { class: "btn btn-chip chip-static" }, h("span", { class: "chip-dot" }), FOCUS_LABEL[p.settings.focus]),
             p.demo ? null : h("button", { type: "button", class: "btn btn-ghost", onClick: p.onBack }, "Amis"),
           )
         : h(
             "div",
             { class: "appbar-actions" },
-            h("button", { type: "button", class: "btn btn-chip", onClick: p.onStrategy, "aria-label": `Stratégie : ${FOCUS_LABEL[p.settings.focus]}. Changer` }, h("span", { class: "chip-dot" }), FOCUS_LABEL[p.settings.focus]),
             iconButton("Nouvel export", "upload", p.onNewExport),
-            iconButton("Réglages", "settings", p.onSettings),
+            iconButton("Réglages", "settings", p.onSettings, "icon-only"),
             h(
               "button",
               { type: "button", class: p.tab === "more" ? "avatar active" : "avatar", onClick: () => p.onTab("more"), title: "Mon compte", "aria-label": `Mon compte (${p.me})` },
@@ -595,14 +595,45 @@ function summaryTab(p: DashboardProps, f: Forecast): HTMLElement {
     h(
       "div",
       { class: "strategy" },
-      h("span", null, h("strong", null, `Priorité ${FOCUS_LABEL[s.focus].toLowerCase()}`), ` · ${passText} · ${s.builders + (s.goblinBuilder ? 1 : 0)} ouvriers · ${nf(s.medals)} médailles · ${sleepLabel(s.sleep)}`),
-      ro ? null : h("button", { type: "button", class: "link", onClick: p.onStrategy }, "Changer"),
+      focusSwitch(p),
+      h("span", { class: "strategy-meta" }, `${passText} · ${s.builders + (s.goblinBuilder ? 1 : 0)} ouvriers · ${nf(s.medals)} médailles · ${sleepLabel(s.sleep)}`),
+      ro ? null : h("button", { type: "button", class: "link", onClick: p.onSettings }, "Réglages"),
     ),
     exportAgeNotice(p),
     pushPrompt(p),
     h("div", { class: `tiles tiles-${tiles.length}` }, tiles),
     h("div", { class: "dash-grid" }, h("div", { class: "stack" }, todoCard, nextCard), h("div", { class: "stack" }, heroCard, progressCard)),
     h("div", { class: "dash-grid" }, resourceCard, medalCard),
+  );
+}
+
+const FOCUSES: Focus[] = ["heroes", "buildings", "hybrid"];
+
+/** Plan choisi, modifiable en un clic ; en lecture seule pour le village d'un ami. */
+function focusSwitch(p: DashboardProps): HTMLElement {
+  const ro = readOnly(p);
+  return h(
+    "div",
+    { class: "focus-switch" },
+    h("span", { class: "focus-switch-label", id: "focus-switch" }, "Plan"),
+    h(
+      "div",
+      { class: "segmented seg-3", role: "radiogroup", "aria-labelledby": "focus-switch" },
+      FOCUSES.map((f) =>
+        h(
+          "button",
+          {
+            type: "button",
+            role: "radio",
+            class: "seg-btn",
+            "aria-checked": String(p.settings.focus === f),
+            disabled: ro && p.settings.focus !== f,
+            onClick: () => !ro && p.settings.focus !== f && p.onFocus(f),
+          },
+          FOCUS_LABEL[f],
+        ),
+      ),
+    ),
   );
 }
 
