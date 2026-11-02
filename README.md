@@ -1,6 +1,6 @@
 # COC Tracker
 
-Site pour suivre son village Clash of Clans pendant le Hammer Jam, et l'avancement de ses potes.
+Site pour suivre son village Clash of Clans pendant le Hammer Jam, et l'avancement de ses amis.
 Chaque joueur crée un compte (pseudo, email confirmé par un code, mot de passe, code d'invitation),
 colle l'export de son village et voit son plan : héros, bâtiments, labo, potions, achats en médailles.
 Tous les inscrits voient le classement et le plan des autres, en lecture seule.
@@ -34,7 +34,7 @@ git clone … && cd coc_tracker
 cp .env.example .env
 # POSTGRES_PASSWORD : openssl rand -hex 24
 # JWT_SECRET        : openssl rand -hex 32
-# INVITE_CODE       : le code à donner à tes potes (vide = inscription ouverte)
+# INVITE_CODE       : le code à donner à tes amis (vide = inscription ouverte)
 # SMTP_* et MAIL_FROM : voir ci-dessous
 docker compose up -d --build
 docker compose logs app | grep SMTP     # « SMTP prêt » : les emails partiront

@@ -16,12 +16,13 @@ import { authView, type AuthMode, type AuthState } from "./ui/auth";
 import { dashboardView, tabsFor, type Tab } from "./ui/dashboard";
 import { h } from "./ui/dom";
 import { homeView } from "./ui/home";
+import { landingView } from "./ui/landing";
 import { legalFooter } from "./ui/legal";
 import { onboardingView } from "./ui/onboarding";
 import { playersView } from "./ui/players";
 import { settingsDialog } from "./ui/settings";
 
-type View = "loading" | "auth" | "home" | "onboarding" | "dash" | "players" | "profile";
+type View = "loading" | "landing" | "auth" | "home" | "onboarding" | "dash" | "players" | "profile";
 
 interface Loaded {
   village: Village;
@@ -98,6 +99,8 @@ async function loadMine(): Promise<void> {
   state.settings = settings;
   state.mine = loadProfile(profile);
   state.view = state.mine ? "dash" : "home";
+  // Le classement sert aussi au dashboard : chargé en fond.
+  void loadPlayers();
 }
 
 async function boot(): Promise<void> {
@@ -112,8 +115,12 @@ async function boot(): Promise<void> {
     state.me = (await api.me()).username;
     await loadMine();
   } catch (e) {
-    if (!(e instanceof ApiError && e.status === 401)) state.auth.error = handleError(e);
-    state.view = "auth";
+    if (!(e instanceof ApiError && e.status === 401)) {
+      state.auth.error = handleError(e);
+      state.view = "auth";
+    } else {
+      state.view = "landing";
+    }
   }
   render();
 }
@@ -167,7 +174,18 @@ const authActions = {
     }),
   onReset: (d: { email: string; code: string; password: string }) =>
     void authStep(async () => signedIn((await api.reset(d.email, d.code, d.password)).username)),
+  onHome: () => {
+    state.view = "landing";
+    render();
+    window.scrollTo(0, 0);
+  },
 };
+
+function openAuth(mode: AuthMode) {
+  state.view = "auth";
+  setAuth(mode);
+  window.scrollTo(0, 0);
+}
 
 async function submitExport(text: string) {
   const local = parseExport(text.trim());
@@ -241,7 +259,7 @@ async function logout(everywhere = false) {
   state.mine = null;
   state.friend = null;
   state.players = { rows: null };
-  state.view = "auth";
+  state.view = "landing";
   state.auth = { mode: "login", busy: false, inviteRequired: state.auth.inviteRequired };
   render();
 }
@@ -261,7 +279,7 @@ function playersPage(): HTMLElement {
     h(
       "div",
       { class: "section-head" },
-      h("div", null, h("h1", { class: "title" }, "Potes"), h("p", { class: "lead" }, "Classés par avancement du village.")),
+      h("div", null, h("h1", { class: "title" }, "Amis"), h("p", { class: "lead" }, "Classés par avancement du village.")),
       h("button", { type: "button", class: "btn btn-ghost", onClick: () => ((state.view = "home"), render()) }, "Coller mon export"),
     ),
     playersView({ ...state.players, me: state.me!, onOpen: (u) => void openPlayer(u) }),
@@ -285,6 +303,9 @@ function renderView(): void {
   switch (state.view) {
     case "loading":
       root.append(h("main", { class: "page home" }, h("p", { class: "muted center" }, "Chargement…")));
+      return;
+    case "landing":
+      root.append(landingView({ onLogin: () => openAuth("login"), onRegister: () => openAuth("register") }));
       return;
     case "auth":
       root.append(
@@ -376,6 +397,13 @@ function renderView(): void {
       state.view = state.mine ? "dash" : "players";
       if (state.mine) goTab("players");
       else render();
+    },
+    onMine: () => {
+      state.friend = null;
+      state.view = state.mine ? "dash" : "home";
+      state.tab = "summary";
+      render();
+      window.scrollTo(0, 0);
     },
     onLogout: () => void logout(),
     onLogoutAll: () => void logout(true),

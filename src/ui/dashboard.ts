@@ -21,17 +21,17 @@ import { sprite } from "./sprite";
 export type Tab = "summary" | "plan" | "heroes" | "buildings" | "lab" | "progress" | "players" | "more";
 
 const TAB_LABEL: Record<Tab, string> = {
-  summary: "Résumé",
+  summary: "Dashboard",
   plan: "Plan",
   heroes: "Héros",
   buildings: "Bâtiments",
   lab: "Labo",
   progress: "Progression",
-  players: "Potes",
+  players: "Amis",
   more: "Plus",
 };
 
-/** Onglets : un profil de pote est en lecture seule, sans « Potes » ni « Plus ». */
+/** Onglets : le profil d'un ami est en lecture seule, sans « Amis » ni « Plus ». */
 export function tabsFor(s: Settings, readOnly = false): Tab[] {
   const tabs: Tab[] = s.focus === "buildings"
     ? ["summary", "plan", "buildings", "heroes", "lab", "progress", "players", "more"]
@@ -47,7 +47,7 @@ export interface DashboardProps {
   history: Snapshot[];
   /** Joueur connecté. */
   me: string;
-  /** Propriétaire du village affiché ; différent de `me` pour le profil d'un pote (lecture seule). */
+  /** Propriétaire du village affiché ; différent de `me` pour le profil d'un ami (lecture seule). */
   owner: string;
   players: { rows: PlayerRow[] | null; error?: string };
   tab: Tab;
@@ -57,6 +57,8 @@ export interface DashboardProps {
   onNewExport: () => void;
   onOpenPlayer: (username: string) => void;
   onBack: () => void;
+  /** Quitte le profil d'un ami pour revenir à son propre dashboard. */
+  onMine: () => void;
   onLogout: () => void;
   onLogoutAll: () => void;
 }
@@ -76,6 +78,19 @@ function appHeader(p: DashboardProps): HTMLElement {
   return h(
     "header",
     { class: "appbar" },
+    readOnly(p)
+      ? h(
+          "div",
+          { class: "friend-banner", role: "status" },
+          h(
+            "div",
+            { class: "friend-banner-inner" },
+            h("span", { class: "friend-eye", "aria-hidden": "true" }, "👀"),
+            h("span", null, "Tu regardes le village de ", h("strong", null, p.owner), h("span", { class: "friend-ro" }, " · lecture seule")),
+            h("button", { type: "button", class: "btn btn-banner", onClick: p.onMine }, "Revenir à mon village"),
+          ),
+        )
+      : null,
     h(
       "div",
       { class: "appbar-inner" },
@@ -95,7 +110,7 @@ function appHeader(p: DashboardProps): HTMLElement {
             "div",
             { class: "appbar-actions" },
             h("span", { class: "btn btn-chip chip-static" }, h("span", { class: "chip-dot" }), FOCUS_LABEL[p.settings.focus]),
-            h("button", { type: "button", class: "btn btn-ghost", onClick: p.onBack }, "← Potes"),
+            h("button", { type: "button", class: "btn btn-ghost", onClick: p.onBack }, "← Amis"),
           )
         : h(
             "div",
@@ -190,87 +205,244 @@ function todos(f: Forecast, v: Village): Todo[] {
   return out;
 }
 
+/** « dans 3 h », « dans 2 j 4 h » à partir de maintenant ; null si c'est passé. */
+function fromNow(unixSec: number): string | null {
+  const ms = unixSec * 1000 - Date.now();
+  if (ms <= 0) return null;
+  const d = Math.floor(ms / 86_400_000);
+  const hr = Math.floor((ms % 86_400_000) / 3_600_000);
+  const min = Math.floor((ms % 3_600_000) / 60_000);
+  return d > 0 ? `dans ${d} j ${hr} h` : hr > 0 ? `dans ${hr} h ${String(min).padStart(2, "0")}` : `dans ${min} min`;
+}
+
+interface Upcoming {
+  r: ChainResult;
+  end: number;
+  toLevel: number;
+  pool: string;
+}
+
+/** Prochaines fins de chantier (héros, bâtiments, labo, animaux), à partir de maintenant. */
+function upcoming(f: Forecast, exportUnix: number, limit: number): Upcoming[] {
+  const nowH = Math.max(0, (Date.now() / 1000 - exportUnix) / 3600);
+  const pools: [ChainResult[], string][] = [
+    [f.heroes.results, "Ouvrier"],
+    [f.buildings.results, "Ouvrier"],
+    [f.labBest.results, "Labo"],
+    [f.pets.results, "Animaux"],
+  ];
+  return pools
+    .flatMap(([results, pool]) => results.flatMap((r) => r.segments.filter((s) => s.end >= nowH).map((s) => ({ r, end: s.end, toLevel: s.toLevel, pool }))))
+    .sort((a, b) => a.end - b.end)
+    .slice(0, limit);
+}
+
+function costByResource(results: ChainResult[]): Map<string, number> {
+  const byRes = new Map<string, number>();
+  for (const r of results) {
+    const total = r.segments.filter((s) => !s.inProgressAtExport).reduce((n, s) => n + s.cost, 0);
+    const k = res(r.chain.entry.resource);
+    if (total && k) byRes.set(k, (byRes.get(k) ?? 0) + total);
+  }
+  return byRes;
+}
+
 function summaryTab(p: DashboardProps, f: Forecast): HTMLElement {
   const v = p.village;
   const s = p.settings;
   const T = f.heroes.tHours;
   const cats = progress(v);
   const go = (t: Tab) => () => p.onTab(t);
+  const ro = readOnly(p);
 
   if (T <= 0) {
     return h("section", null, sectionHead("Le Jam est terminé", `Cet export date du ${fmtDateTime(toDate(v.timestamp, 0))}, après la fin du Jam.`));
   }
 
-  const heroTile = tile("Héros", `+${f.heroes.gainedLaunched}`, `${plural(f.heroes.gainedLaunched, "niveau")}, ${afterJam(f.heroes)}`, go("heroes"));
-  const buildingTile = tile("Bâtiments", `+${f.buildings.gainedLaunched}`, `${plural(f.buildings.gainedLaunched, "niveau")}, ${afterJam(f.buildings)}`, go("buildings"));
-  const labTile = tile("Labo", `+${f.labBest.gainedLaunched}`, `${plural(f.labBest.gainedLaunched, "niveau")}, plus courts d'abord`, go("lab"));
-  const petTile = tile("Animaux", `+${f.pets.gainedLaunched}`, plural(f.pets.gainedLaunched, "niveau"), go("lab"));
-  const tiles =
-    s.focus === "heroes" ? [heroTile, labTile, petTile]
-    : s.focus === "buildings" ? [buildingTile, labTile, petTile]
-    : [heroTile, buildingTile, labTile, petTile];
-
-  const list = todos(f, v);
-  const passText = s.pass.builder ? `Pass d'or ${Math.round(s.pass.builder * 100)} %` : "Sans Pass d'or";
+  // Chiffres clés.
+  const points = progressCurve(v, f);
+  const endPoint = points.reduce((b, q) => (Math.abs(q.t - T) < Math.abs(b.t - T) ? q : b));
   const g = globalPct(cats);
+  const rows = p.players.rows ?? [];
+  const rank = rows.findIndex((r) => r.username.toLowerCase() === p.owner.toLowerCase());
+  const tiles = [
+    tile("Village", pctText(g), `environ ${pctText(endPoint.global)} à la fin du Jam`, go("progress")),
+    s.focus !== "buildings" || f.heroes.gainedLaunched
+      ? tile("Héros", `+${f.heroes.gainedLaunched}`, `${plural(f.heroes.gainedLaunched, "niveau")}, ${afterJam(f.heroes)}`, go("heroes"))
+      : null,
+    s.focus !== "heroes" || f.buildings.gainedLaunched > 1
+      ? tile("Bâtiments", `+${f.buildings.gainedLaunched}`, `${plural(f.buildings.gainedLaunched, "niveau")}, ${afterJam(f.buildings)}`, go("buildings"))
+      : null,
+    tile("Labo", `+${f.labBest.gainedLaunched}`, `${plural(f.labBest.gainedLaunched, "niveau")}, plus courts d'abord`, go("lab")),
+    tile("Animaux", `+${f.pets.gainedLaunched}`, plural(f.pets.gainedLaunched, "niveau"), go("lab")),
+    rank >= 0 ? tile("Classement", `${rank + 1}${rank === 0 ? "er" : "e"}`, `sur ${rows.length} ${plural(rows.length, "joueur")}`, ro ? undefined : go("players")) : null,
+  ].filter((x): x is HTMLElement => x != null);
+
+  // Fin du Jam : compte à rebours depuis maintenant.
+  const endUnix = Date.parse(JAM.end) / 1000;
+  const left = fromNow(endUnix);
+  const passText = s.pass.builder ? `Pass d'or ${Math.round(s.pass.builder * 100)} %` : "Sans Pass d'or";
+
+  // À faire et prochaines fins.
+  const list = todos(f, v);
+  const todoCard = h(
+    "section",
+    { class: "card" },
+    h("h2", { class: "card-title" }, "À faire maintenant"),
+    h("p", { class: "hint card-sub" }, `D'après l'export du ${fmtDateTime(toDate(v.timestamp, 0))}.`),
+    list.length
+      ? h(
+          "ul",
+          { class: "todo" },
+          list.map((t) =>
+            h(
+              "li",
+              { class: t.urgent ? "todo-item urgent" : "todo-item" },
+              t.icon ?? h("span", { class: "todo-dot", "aria-hidden": "true" }),
+              h("div", null, h("p", { class: "todo-text" }, t.text), t.sub ? h("p", { class: "hint" }, t.sub) : null),
+            ),
+          ),
+        )
+      : h("p", { class: "muted" }, "Tout tourne. Reviens à la prochaine fin de chantier."),
+    h("button", { type: "button", class: "link", onClick: go("plan") }, "Voir le plan jour par jour"),
+  );
+
+  const next = upcoming(f, v.timestamp, 6);
+  const nextCard = h(
+    "section",
+    { class: "card" },
+    h("h2", { class: "card-title" }, "Prochaines fins de chantier"),
+    next.length
+      ? h(
+          "ul",
+          { class: "brows" },
+          next.map((u) =>
+            h(
+              "li",
+              { class: "brow" },
+              sprite(u.r.chain.category, u.r.chain.entry, u.r.chain.category === "buildings" || u.r.chain.category === "traps" ? u.toLevel - 1 : undefined, "sm"),
+              h(
+                "div",
+                { class: "brow-main" },
+                h("p", { class: "brow-name" }, `${u.r.chain.category === "heroes" ? heroLabel(u.r.chain) : displayName(u.r.chain.entry)} ${u.toLevel - 1} → ${u.toLevel}`),
+                h("p", { class: "hint" }, `${u.pool} · ${fmtDateTime(toDate(v.timestamp, u.end))}`),
+              ),
+              h("span", { class: "pill pill-soft" }, fromNow(v.timestamp + u.end * 3600) ?? "fini ?"),
+            ),
+          ),
+        )
+      : h("p", { class: "muted" }, "Aucun chantier prévu."),
+  );
+
+  // Héros : niveau actuel sur le max.
+  const heroCard = f.heroes.results.length
+    ? h(
+        "section",
+        { class: "card" },
+        h("div", { class: "card-head" }, h("h2", { class: "card-title" }, "Héros"), h("button", { type: "button", class: "link", onClick: go("heroes") }, "Calendrier")),
+        h(
+          "ul",
+          { class: "hero-levels" },
+          f.heroes.results.map((r) => {
+            const max = maxLevel(r.chain.entry, { th: v.th });
+            const now = r.chain.startLevel;
+            const end = levelLaunched(r);
+            return h(
+              "li",
+              null,
+              sprite(r.chain.category, r.chain.entry, undefined, "sm"),
+              h(
+                "div",
+                { class: "hero-level-main" },
+                h(
+                  "div",
+                  { class: "hero-level-head" },
+                  h("strong", null, heroLabel(r.chain)),
+                  h("span", { class: "muted" }, `${now} / ${max}`),
+                ),
+                h(
+                  "span",
+                  { class: "bar bar-dual", role: "img", "aria-label": `${heroLabel(r.chain)} : niveau ${now}, ${end} prévu, sur ${max}` },
+                  h("span", { class: "bar-plan", style: { width: `${(end / max) * 100}%` } }),
+                  h("span", { style: { width: `${(now / max) * 100}%` } }),
+                ),
+              ),
+              h("span", { class: end > now ? "pill" : "pill pill-soft" }, end >= max ? "MAX" : `+${end - now}`),
+            );
+          }),
+        ),
+        h("p", { class: "legend hint" }, h("span", { class: "key key-done" }), "niveau actuel", h("span", { class: "key key-maybe" }), "prévu pendant le Jam"),
+      )
+    : null;
+
+  const progressCard = h(
+    "section",
+    { class: "card" },
+    h("div", { class: "card-head" }, h("h2", { class: "card-title" }, "Avancement du village"), h("span", { class: "big-pct" }, pctText(g))),
+    h(
+      "ul",
+      { class: "bars" },
+      cats.map((c) =>
+        h(
+          "li",
+          null,
+          h("span", { class: "bars-label" }, c.label),
+          h("span", { class: "bar", role: "img", "aria-label": `${c.label} : ${pctText(pct(c))}` }, h("span", { style: { width: `${pct(c) * 100}%` } })),
+          h("span", { class: "bars-value" }, pctText(pct(c))),
+        ),
+      ),
+    ),
+    h("button", { type: "button", class: "link", onClick: go("progress") }, "Voir la courbe"),
+  );
+
+  // Ressources et médailles.
+  const costs = costByResource([...f.heroes.results, ...f.buildings.results, ...f.labBest.results, ...f.pets.results]);
+  const spent =
+    s.potions.builder.purchases * JAM.potions.builder.medalPrice +
+    s.potions.research.purchases * JAM.potions.research.medalPrice +
+    s.heroHammers * JAM.hammers.heroes.medalPrice;
+  const resourceCard = h(
+    "section",
+    { class: "card" },
+    h("h2", { class: "card-title" }, "Ressources à prévoir"),
+    costs.size
+      ? h("ul", { class: "kv" }, [...costs].map(([k, n]) => h("li", null, h("span", { class: "muted" }, k), h("strong", null, compact(n)))))
+      : h("p", { class: "muted" }, "Rien à payer."),
+    h("p", { class: "hint" }, "Tout le plan, coûts réduits par le Jam, chantiers en cours exclus."),
+  );
+  const medalCard = h(
+    "section",
+    { class: "card" },
+    h("div", { class: "card-head" }, h("h2", { class: "card-title" }, "Médailles"), h("button", { type: "button", class: "link", onClick: go("plan") }, "Détail")),
+    h(
+      "ul",
+      { class: "kv" },
+      h("li", null, h("span", { class: "muted" }, "Sur le compte"), h("strong", null, nf(s.medals))),
+      h("li", null, h("span", { class: "muted" }, "Prévues en achats"), h("strong", null, nf(spent))),
+      h("li", null, h("span", { class: "muted" }, "À acheter"), h("strong", null, purchaseText(s))),
+    ),
+    spent > s.medals ? h("p", { class: "alert" }, "Ces achats dépassent les médailles.") : null,
+  );
 
   return h(
     "section",
     { class: "stack" },
     sectionHead(
-      readOnly(p) ? `Plan de ${p.owner}` : "Ton plan pour le Jam",
-      `Fin le ${fmtDayLong(new Date(JAM.end))} à ${fmtHour(new Date(JAM.end))}, dans ${fmtDays(T)} jours.`,
+      ro ? `Dashboard de ${p.owner}` : "Dashboard",
+      `${left ? `Fin du Jam ${left}` : "Le Jam est fini"}, le ${fmtDayLong(new Date(JAM.end))} à ${fmtHour(new Date(JAM.end))}.`,
       estimate(),
     ),
     h(
       "div",
       { class: "strategy" },
       h("span", null, h("strong", null, `Priorité ${FOCUS_LABEL[s.focus].toLowerCase()}`), ` · ${passText} · ${s.builders + (s.goblinBuilder ? 1 : 0)} ouvriers · ${nf(s.medals)} médailles · ${sleepLabel(s.sleep)}`),
-      readOnly(p) ? null : h("button", { type: "button", class: "link", onClick: p.onStrategy }, "Changer"),
+      ro ? null : h("button", { type: "button", class: "link", onClick: p.onStrategy }, "Changer"),
     ),
     h("div", { class: `tiles tiles-${tiles.length}` }, tiles),
-    h(
-      "section",
-      { class: "card" },
-      h("h2", { class: "card-title" }, "À faire maintenant"),
-      list.length
-        ? h(
-            "ul",
-            { class: "todo" },
-            list.map((t) =>
-              h(
-                "li",
-                { class: t.urgent ? "todo-item urgent" : "todo-item" },
-                t.icon ?? h("span", { class: "todo-dot", "aria-hidden": "true" }),
-                h("div", null, h("p", { class: "todo-text" }, t.text), t.sub ? h("p", { class: "hint" }, t.sub) : null),
-              ),
-            ),
-          )
-        : h("p", { class: "muted" }, "Tout tourne. Reviens à la prochaine fin de chantier."),
-      h("button", { type: "button", class: "link", onClick: go("plan") }, "Voir le plan jour par jour"),
-    ),
-    h(
-      "section",
-      { class: "card" },
-      h("div", { class: "card-head" }, h("h2", { class: "card-title" }, "Avancement du village"), h("span", { class: "big-pct" }, pctText(g))),
-      h(
-        "ul",
-        { class: "bars" },
-        cats.map((c) =>
-          h(
-            "li",
-            null,
-            h("span", { class: "bars-label" }, c.label),
-            h("span", { class: "bar", role: "img", "aria-label": `${c.label} : ${pctText(pct(c))}` }, h("span", { style: { width: `${pct(c) * 100}%` } })),
-            h("span", { class: "bars-value" }, pctText(pct(c))),
-          ),
-        ),
-      ),
-      h("button", { type: "button", class: "link", onClick: go("progress") }, "Voir la courbe"),
-    ),
+    h("div", { class: "dash-grid" }, h("div", { class: "stack" }, todoCard, nextCard), h("div", { class: "stack" }, heroCard, progressCard)),
+    h("div", { class: "dash-grid" }, resourceCard, medalCard),
   );
 }
-
 
 /* ---------- Plan ---------- */
 
@@ -440,8 +612,7 @@ function planTab(p: DashboardProps, f: Forecast): HTMLElement {
     "section",
     { class: "stack" },
     sectionHead(readOnly(p) ? `Plan de ${p.owner}, jour par jour` : "Ton plan jour par jour", "Heure de Paris. Reviens à ces heures pour relancer.", estimate()),
-    rulesCard(p, f),
-    purchaseCard(p),
+    h("div", { class: "dash-grid" }, rulesCard(p, f), purchaseCard(p)),
     h("h2", { class: "section-title" }, "Calendrier des relances"),
     calendar(f, p.village.timestamp),
     waveCard(p, f),
@@ -472,7 +643,7 @@ function heroesTab(p: DashboardProps, f: Forecast): HTMLElement {
     { class: "stack" },
     sectionHead("Héros", `+${f.heroes.gainedLaunched} ${plural(f.heroes.gainedLaunched, "niveau")} pendant le Jam`, estimate()),
     focusNote,
-    rows.length ? ganttCard(rows, v.timestamp, T) : h("p", { class: "muted" }, "Aucun héros dans cet export."),
+    rows.length ? ganttCard(rows, v.timestamp, T, v.th, p.settings.sleep) : h("p", { class: "muted" }, "Aucun héros dans cet export."),
     h("section", { class: "card" }, h("h2", { class: "card-title" }, "Ressources à prévoir"), h("p", { class: "muted" }, costLine(f.heroes.results)), h("p", { class: "hint" }, "Coûts réduits par le Jam, chantiers en cours exclus.")),
   );
 }
@@ -585,7 +756,7 @@ function buildingsTab(p: DashboardProps, f: Forecast): HTMLElement {
           h("div", { class: "wall-num" }, h("span", { class: "tile-value" }, nf(walls.remaining)), h("span", { class: "hint" }, "restants")),
         )
       : null,
-    [...groups].map(([g, rows]) => groupCard(g, rows)),
+    h("div", { class: "dash-grid dash-grid-start" }, [...groups].map(([g, rows]) => groupCard(g, rows))),
     h("p", { class: "hint" }, "Bâtiments permanents uniquement. Ordre de priorité : défenses, puis armée et village, ressources et pièges."),
   );
 }
@@ -625,8 +796,7 @@ function labTab(p: DashboardProps, f: Forecast): HTMLElement {
     "section",
     { class: "stack" },
     sectionHead("Labo et animaux", "Les recherches les plus courtes d'abord, pour gagner le plus de niveaux.", estimate()),
-    queueCard("Labo", f.labBest, p.village.timestamp),
-    queueCard("Animaux", f.pets, p.village.timestamp),
+    h("div", { class: "dash-grid" }, queueCard("Labo", f.labBest, p.village.timestamp), queueCard("Animaux", f.pets, p.village.timestamp)),
   );
 }
 
@@ -676,13 +846,13 @@ function moreTab(p: DashboardProps, f: Forecast): HTMLElement {
   );
 }
 
-/* ---------- Potes ---------- */
+/* ---------- Amis ---------- */
 
 function playersTab(p: DashboardProps): HTMLElement {
   return h(
     "section",
     { class: "stack" },
-    sectionHead("Potes", "Classés par avancement du village. Touche un joueur pour voir son plan."),
+    sectionHead("Amis", "Classés par avancement du village. Touche un joueur pour voir son plan."),
     playersView({ ...p.players, me: p.me, onOpen: p.onOpenPlayer }),
   );
 }
@@ -701,10 +871,12 @@ export function dashboardView(p: DashboardProps): HTMLElement {
     : p.tab === "players" && !readOnly(p) ? playersTab(p)
     : p.tab === "more" && !readOnly(p) ? moreTab(p, f)
     : summaryTab(p, f);
+  const ro = readOnly(p);
   return h(
     "div",
-    { class: "app" },
+    { class: ro ? "app viewing-friend" : "app" },
     appHeader(p),
+    ro ? h("div", { class: "friend-frame", "aria-hidden": "true" }) : null,
     h("main", { class: "page dash" }, h("p", { class: "eyebrow" }, `Export du ${fmtDateTime(toDate(v.timestamp, 0))} · heure de Paris`), body),
   );
 }
