@@ -34,6 +34,8 @@ const state: {
   me: string | null;
   auth: AuthState;
   homeError?: string;
+  /** Message sur la page d'accueil (serveur injoignable). */
+  landingError?: string;
   settings: Settings;
   samePass: boolean;
   mine: Loaded | null;
@@ -115,14 +117,27 @@ async function boot(): Promise<void> {
     state.me = (await api.me()).username;
     await loadMine();
   } catch (e) {
-    if (!(e instanceof ApiError && e.status === 401)) {
-      state.auth.error = handleError(e);
-      state.view = "auth";
-    } else {
-      state.view = "landing";
-    }
+    // Pas de session (401) : rien à signaler. Sinon, le serveur ne répond pas.
+    if (!(e instanceof ApiError && e.status === 401)) state.landingError = "Le serveur ne répond pas pour le moment : la connexion est indisponible.";
   }
+  // La page d'accueil s'affiche toujours en premier, connecté ou non.
+  state.view = "landing";
   render();
+}
+
+/** Depuis la page d'accueil : ton dashboard, ou l'écran pour coller l'export s'il n'y en a pas encore. */
+function openMine() {
+  state.friend = null;
+  state.view = state.mine ? "dash" : "home";
+  state.tab = "summary";
+  render();
+  window.scrollTo(0, 0);
+}
+
+function goLanding() {
+  state.view = "landing";
+  render();
+  window.scrollTo(0, 0);
 }
 
 function setAuth(mode: AuthMode, extra: Partial<AuthState> = {}) {
@@ -305,7 +320,26 @@ function renderView(): void {
       root.append(h("main", { class: "page home" }, h("p", { class: "muted center" }, "Chargement…")));
       return;
     case "landing":
-      root.append(landingView({ onLogin: () => openAuth("login"), onRegister: () => openAuth("register") }));
+      root.append(
+        landingView({
+          me: state.me,
+          error: state.landingError,
+          onLogin: () => openAuth("login"),
+          onRegister: () => openAuth("register"),
+          onDashboard: openMine,
+          onFriends: () => {
+            if (state.mine) {
+              state.friend = null;
+              state.view = "dash";
+              goTab("players");
+            } else {
+              state.view = "players";
+              void loadPlayers();
+            }
+          },
+          onLogout: () => void logout(),
+        }),
+      );
       return;
     case "auth":
       root.append(
@@ -398,13 +432,8 @@ function renderView(): void {
       if (state.mine) goTab("players");
       else render();
     },
-    onMine: () => {
-      state.friend = null;
-      state.view = state.mine ? "dash" : "home";
-      state.tab = "summary";
-      render();
-      window.scrollTo(0, 0);
-    },
+    onMine: openMine,
+    onHome: goLanding,
     onLogout: () => void logout(),
     onLogoutAll: () => void logout(true),
   });

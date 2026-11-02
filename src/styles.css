@@ -2027,3 +2027,19 @@ legend {
     height: 48px;
   }
 }
+
+.landing-me {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.brand[role="link"] {
+  cursor: pointer;
+  border-radius: 12px;
+}
+
+.brand[role="link"]:focus-visible {
+  outline: 2px solid var(--text);
+  outline-offset: 4px;
+}

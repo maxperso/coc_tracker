@@ -59,6 +59,8 @@ export interface DashboardProps {
   onBack: () => void;
   /** Quitte le profil d'un ami pour revenir à son propre dashboard. */
   onMine: () => void;
+  /** Retour à la page d'accueil. */
+  onHome: () => void;
   onLogout: () => void;
   onLogoutAll: () => void;
 }
@@ -96,7 +98,7 @@ function appHeader(p: DashboardProps): HTMLElement {
       { class: "appbar-inner" },
       h(
         "div",
-        { class: "brand" },
+        { class: "brand", role: "link", tabindex: 0, title: "Accueil", onClick: p.onHome, onKeydown: (e: Event) => (e as KeyboardEvent).key === "Enter" && p.onHome() },
         potion ? sprite("buildings", potion, potion.levels?.at(-1)?.l, "sm") : null,
         h(
           "div",
