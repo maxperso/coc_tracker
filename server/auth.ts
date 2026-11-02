@@ -5,7 +5,11 @@ import { jwtVerify, SignJWT } from "jose";
 import type { Config } from "./config";
 import type { Db } from "./db";
 
-export const COOKIE = "coc_session";
+/**
+ * En HTTPS, préfixe __Host- : le navigateur impose Secure, Path=/ et aucun Domain,
+ * donc un sous-domaine ne peut pas écraser le cookie.
+ */
+export const cookieName = (cfg: Pick<Config, "cookieSecure">) => (cfg.cookieSecure ? "__Host-coc_session" : "coc_session");
 const SESSION_DAYS = 30;
 
 export const USERNAME_RE = /^[A-Za-z0-9_-]{3,20}$/;
@@ -33,7 +37,7 @@ export async function issueSession(reply: FastifyReply, cfg: Config, user: { id:
     .setIssuedAt()
     .setExpirationTime(`${SESSION_DAYS}d`)
     .sign(cfg.jwtSecret);
-  reply.setCookie(COOKIE, token, {
+  reply.setCookie(cookieName(cfg), token, {
     httpOnly: true,
     secure: cfg.cookieSecure,
     sameSite: "lax",
@@ -43,7 +47,7 @@ export async function issueSession(reply: FastifyReply, cfg: Config, user: { id:
 }
 
 export function clearSession(reply: FastifyReply, cfg: Config) {
-  reply.clearCookie(COOKIE, { path: "/", httpOnly: true, secure: cfg.cookieSecure, sameSite: "lax" });
+  reply.clearCookie(cookieName(cfg), { path: "/", httpOnly: true, secure: cfg.cookieSecure, sameSite: "lax" });
 }
 
 /**
@@ -51,17 +55,17 @@ export function clearSession(reply: FastifyReply, cfg: Config) {
  * (token_version incrémenté) ou si le compte n'existe plus.
  */
 export async function readSession(req: FastifyRequest, cfg: Config, db: Db): Promise<SessionUser | null> {
-  const token = req.cookies[COOKIE];
+  const token = req.cookies[cookieName(cfg)];
   if (!token) return null;
   try {
     const { payload } = await jwtVerify(token, cfg.jwtSecret, { algorithms: ["HS256"] });
     const id = Number(payload.sub);
-    const { rows } = await db.query<{ id: string; username: string; token_version: number }>(
-      "select id, username, token_version from users where id = $1",
+    const { rows } = await db.query<{ id: string; username: string; token_version: number; verified: boolean }>(
+      "select id, username, token_version, email_verified_at is not null as verified from users where id = $1",
       [id],
     );
     const u = rows[0];
-    if (!u || u.token_version !== payload.ver) return null;
+    if (!u || !u.verified || u.token_version !== payload.ver) return null;
     return { id: Number(u.id), username: u.username };
   } catch {
     return null;

@@ -1,6 +1,5 @@
 import { MAX_EXPORT_CHARS } from "../lib/exportParse";
 import { h } from "./dom";
-import { legalFooter } from "./legal";
 
 export function homeView(opts: {
   error?: string;
@@ -42,7 +41,7 @@ export function homeView(opts: {
     h(
       "div",
       { class: "paste-actions" },
-      h("p", { id: "paste-note", class: "muted" }, "Ton export est enregistré sur ton compte : tes potes verront ton avancement."),
+      h("p", { id: "paste-note", class: "muted" }, "Ton export est enregistré sur ton compte : tes amis verront ton avancement."),
       h(
         "div",
         { class: "paste-buttons" },
@@ -75,9 +74,8 @@ export function homeView(opts: {
       "div",
       { class: "button-row center-row" },
       opts.onCancel ? h("button", { type: "button", class: "btn btn-ghost", onClick: opts.onCancel }, "Retour à mon plan") : null,
-      h("button", { type: "button", class: "btn btn-ghost", onClick: opts.onPlayers }, "Voir les potes"),
+      h("button", { type: "button", class: "btn btn-ghost", onClick: opts.onPlayers }, "Voir mes amis"),
       h("button", { type: "button", class: "btn btn-ghost", onClick: opts.onLogout }, "Se déconnecter"),
     ),
-    legalFooter(true),
   );
 }

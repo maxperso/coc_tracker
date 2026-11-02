@@ -2,21 +2,27 @@
 //   DATABASE_URL_TEST=postgres://postgres:test@127.0.0.1:55432/coc_test npm test
 // Sans la variable, ces tests sont ignorés. La base indiquée est vidée à chaque lancement.
 import { readFileSync } from "node:fs";
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, InjectOptions } from "fastify";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildApp } from "../server/app";
 import { loadConfig } from "../server/config";
 import { createPool, migrate, type Db } from "../server/db";
+import type { Mail } from "../server/mailer";
 import { DEFAULT_SETTINGS } from "../src/lib/plan";
 
 const url = process.env.DATABASE_URL_TEST;
 const fixture = readFileSync(new URL("./fixtures/valid.json", import.meta.url), "utf8");
 const INVITE = "invite-test-123";
 const ORIGIN = "https://coc.example.test";
+const COOKIE = "__Host-coc_session";
 
 describe.skipIf(!url)("API", () => {
   let db: Db;
   let app: FastifyInstance;
+  const sent: Mail[] = [];
+  // Une IP publique différente par appel, pour ne pas déclencher la limite de tentatives entre tests.
+  let n = 0;
+  const ip = () => `198.51.100.${(n++ % 250) + 1}`;
 
   beforeAll(async () => {
     process.env.NODE_ENV = "test";
@@ -30,131 +36,215 @@ describe.skipIf(!url)("API", () => {
       APP_ORIGIN: ORIGIN,
       COOKIE_SECURE: "true",
     });
-    app = await buildApp(cfg, db);
+    app = await buildApp(cfg, db, { send: async (m) => void sent.push(m) });
   });
   afterAll(async () => {
     await app?.close();
     await db?.end();
   });
 
-  const register = (username: string, password = "motdepasse1", inviteCode = INVITE) =>
-    app.inject({ method: "POST", url: "/api/auth/register", payload: { username, password, inviteCode } });
+  const req = (o: InjectOptions & { cookie?: string }) =>
+    app.inject({ remoteAddress: ip(), ...o, headers: { ...(o.headers ?? {}), ...(o.cookie ? { cookie: o.cookie } : {}) } });
+  const post = (url: string, payload: unknown, cookie?: string) => req({ method: "POST", url, payload: payload as object, cookie });
   const cookieOf = (res: { cookies: { name: string; value: string }[] }) => {
-    const c = res.cookies.find((x) => x.name === "coc_session");
-    return c ? `coc_session=${c.value}` : "";
+    const c = res.cookies.find((x) => x.name === COOKIE);
+    return c?.value ? `${COOKIE}=${c.value}` : "";
+  };
+  const lastCodeFor = (to: string) => {
+    const m = [...sent].reverse().find((x) => x.to.toLowerCase() === to.toLowerCase());
+    return m?.text.match(/\b(\d{6})\b/)?.[1] ?? null;
+  };
+  const register = (username: string, email: string, password = "motdepasse1", inviteCode = INVITE) =>
+    post("/api/auth/register", { username, email, password, inviteCode });
+  /** Inscription complète : code reçu par email, confirmé, session ouverte. */
+  const signup = async (username: string, email: string, password = "motdepasse1") => {
+    expect((await register(username, email, password)).statusCode).toBe(202);
+    const res = await post("/api/auth/verify", { username, code: lastCodeFor(email) });
+    expect(res.statusCode).toBe(200);
+    return cookieOf(res);
   };
 
-  it("répond sur /api/health avec les en-têtes de sécurité", async () => {
-    const res = await app.inject({ url: "/api/health" });
-    expect(res.statusCode).toBe(200);
-    expect(res.headers["x-frame-options"]).toBe("DENY");
-    expect(res.headers["content-security-policy"]).toContain("frame-ancestors 'none'");
-  });
-
-  it("refuse l'inscription sans le bon code d'invitation", async () => {
-    expect((await register("alice", "motdepasse1", "mauvais")).statusCode).toBe(403);
-  });
-
-  it("valide le pseudo et le mot de passe", async () => {
-    expect((await register("a!")).statusCode).toBe(400);
-    expect((await register("alice", "court")).statusCode).toBe(400);
-  });
-
-  it("inscrit un joueur et pose un cookie de session httpOnly, Secure, SameSite=Lax", async () => {
-    const res = await register("Alice");
-    expect(res.statusCode).toBe(201);
-    const c = res.cookies.find((x) => x.name === "coc_session")!;
-    expect(c.httpOnly).toBe(true);
-    expect(c.secure).toBe(true);
-    expect(c.sameSite).toBe("Lax");
-    const me = await app.inject({ url: "/api/auth/me", headers: { cookie: cookieOf(res) } });
-    expect(me.json()).toEqual({ username: "Alice" });
-  });
-
-  it("refuse un pseudo déjà pris, sans tenir compte des majuscules", async () => {
-    expect((await register("alice")).statusCode).toBe(409);
-  });
-
-  it("connexion : erreur générique si mauvais mot de passe ou pseudo inconnu", async () => {
-    const wrong = await app.inject({ method: "POST", url: "/api/auth/login", payload: { username: "alice", password: "faux-mdp-123" } });
-    const ghost = await app.inject({ method: "POST", url: "/api/auth/login", payload: { username: "fantome", password: "faux-mdp-123" } });
-    expect(wrong.statusCode).toBe(401);
-    expect(ghost.statusCode).toBe(401);
-    expect(wrong.json()).toEqual(ghost.json());
-    const ok = await app.inject({ method: "POST", url: "/api/auth/login", payload: { username: "ALICE", password: "motdepasse1" } });
-    expect(ok.statusCode).toBe(200);
-    expect(cookieOf(ok)).not.toBe("");
-  });
-
-  it("refuse l'accès sans session, ou avec un jeton falsifié", async () => {
-    expect((await app.inject({ url: "/api/players" })).statusCode).toBe(401);
-    expect((await app.inject({ url: "/api/players", headers: { cookie: "coc_session=abc.def.ghi" } })).statusCode).toBe(401);
-  });
-
-  it("révoque les sessions après un changement de mot de passe", async () => {
-    const res = await register("bob");
-    const cookie = cookieOf(res);
-    await db.query("update users set token_version = token_version + 1 where username = 'bob'");
-    expect((await app.inject({ url: "/api/auth/me", headers: { cookie } })).statusCode).toBe(401);
-  });
-
-  it("refuse une écriture venant d'une autre origine", async () => {
-    const res = await app.inject({
-      method: "POST",
-      url: "/api/auth/login",
-      headers: { origin: "https://pirate.example" },
-      payload: { username: "alice", password: "motdepasse1" },
+  describe("en-têtes et sécurité générale", () => {
+    it("répond sur /api/health avec les en-têtes de sécurité et no-store", async () => {
+      const res = await req({ url: "/api/health" });
+      expect(res.statusCode).toBe(200);
+      expect(res.headers["x-frame-options"]).toBe("DENY");
+      expect(res.headers["content-security-policy"]).toContain("frame-ancestors 'none'");
+      expect(res.headers["cache-control"]).toBe("no-store");
+      expect(res.headers["cross-origin-opener-policy"]).toBe("same-origin");
     });
-    expect(res.statusCode).toBe(403);
+    it("indique si un code d'invitation est demandé", async () => {
+      expect((await req({ url: "/api/auth/config" })).json()).toEqual({ inviteRequired: true });
+    });
+    it("refuse une écriture d'une autre origine ou d'un autre site", async () => {
+      const a = await req({ method: "POST", url: "/api/auth/login", headers: { origin: "https://pirate.example" }, payload: { username: "x", password: "y" } });
+      const b = await req({ method: "POST", url: "/api/auth/login", headers: { "sec-fetch-site": "cross-site" }, payload: { username: "x", password: "y" } });
+      expect(a.statusCode).toBe(403);
+      expect(b.statusCode).toBe(403);
+    });
+    it("n'accepte pas un X-Forwarded-For venant d'une IP publique (limite de tentatives non contournable)", async () => {
+      const codes: number[] = [];
+      for (let i = 0; i < 12; i++) {
+        const res = await app.inject({
+          method: "POST",
+          url: "/api/auth/login",
+          remoteAddress: "203.0.113.9",
+          headers: { "x-forwarded-for": `1.2.3.${i}` },
+          payload: { username: "personne", password: "faux-mdp-123" },
+        });
+        codes.push(res.statusCode);
+      }
+      expect(codes.slice(0, 10).every((c) => c === 401)).toBe(true);
+      expect(codes.at(-1)).toBe(429);
+    });
   });
 
-  it("enregistre un export, sans doublon pour le même timestamp, et l'affiche dans le classement", async () => {
-    const login = await app.inject({ method: "POST", url: "/api/auth/login", payload: { username: "alice", password: "motdepasse1" } });
-    const cookie = cookieOf(login);
-    const bad = await app.inject({ method: "POST", url: "/api/exports", headers: { cookie }, payload: { text: "{pas du json" } });
-    expect(bad.statusCode).toBe(400);
-    for (let i = 0; i < 2; i++) {
-      const res = await app.inject({ method: "POST", url: "/api/exports", headers: { cookie }, payload: { text: fixture } });
-      expect(res.statusCode).toBe(201);
-    }
-    const { rows } = await db.query("select count(*)::int as n from exports");
-    expect(rows[0].n).toBe(1);
-    const players = (await app.inject({ url: "/api/players", headers: { cookie } })).json();
-    expect(players).toHaveLength(1);
-    expect(players[0].username).toBe("Alice");
-    expect(players[0].summary).toMatchObject({ tag: "#ANON0001", th: 18, focus: DEFAULT_SETTINGS.focus });
-    expect(players[0].summary.plan.heroes).toBeGreaterThan(0);
+  describe("inscription et confirmation par email", () => {
+    it("refuse sans le bon code d'invitation, et valide les champs", async () => {
+      expect((await register("alice", "alice@example.test", "motdepasse1", "mauvais")).statusCode).toBe(403);
+      expect((await register("a!", "alice@example.test")).statusCode).toBe(400);
+      expect((await register("alice", "pas-un-email")).statusCode).toBe(400);
+      expect((await register("alice", "alice@example.test", "court")).statusCode).toBe(400);
+    });
+
+    it("crée un compte en attente, sans session, et envoie un code à 6 chiffres", async () => {
+      const res = await register("Alice", "Alice@Example.test");
+      expect(res.statusCode).toBe(202);
+      expect(cookieOf(res)).toBe("");
+      expect(lastCodeFor("alice@example.test")).toMatch(/^\d{6}$/);
+    });
+
+    it("refuse la connexion tant que l'email n'est pas confirmé", async () => {
+      const res = await post("/api/auth/login", { username: "alice", password: "motdepasse1" });
+      expect(res.statusCode).toBe(403);
+      expect(res.json()).toMatchObject({ needsVerification: true, username: "Alice" });
+    });
+
+    it("refuse un mauvais code, puis accepte le bon et ouvre une session __Host- sécurisée", async () => {
+      expect((await post("/api/auth/verify", { username: "alice", code: "000000" })).statusCode).toBe(400);
+      const res = await post("/api/auth/verify", { username: "alice", code: lastCodeFor("alice@example.test") });
+      expect(res.statusCode).toBe(200);
+      const c = res.cookies.find((x) => x.name === COOKIE)!;
+      expect(c.httpOnly).toBe(true);
+      expect(c.secure).toBe(true);
+      expect(c.sameSite).toBe("Lax");
+      expect(c.path).toBe("/");
+      const me = await req({ url: "/api/auth/me", cookie: cookieOf(res) });
+      expect(me.json()).toEqual({ username: "Alice" });
+    });
+
+    it("un code ne sert qu'une fois", async () => {
+      expect((await post("/api/auth/verify", { username: "alice", code: lastCodeFor("alice@example.test") })).statusCode).toBe(400);
+    });
+
+    it("bloque un code après 5 essais ratés, même avec le bon ensuite", async () => {
+      await register("bruteforce", "brute@example.test");
+      const good = lastCodeFor("brute@example.test")!;
+      const wrong = good === "111111" ? "222222" : "111111";
+      for (let i = 0; i < 5; i++) await post("/api/auth/verify", { username: "bruteforce", code: wrong });
+      expect((await post("/api/auth/verify", { username: "bruteforce", code: good })).statusCode).toBe(400);
+    });
+
+    it("pseudo déjà pris : 409, sans tenir compte des majuscules", async () => {
+      expect((await register("ALICE", "autre@example.test")).statusCode).toBe(409);
+    });
+
+    it("email déjà pris : même réponse qu'un succès, rien n'est créé, le titulaire est prévenu", async () => {
+      const before = sent.length;
+      const res = await register("intrus", "alice@example.test");
+      expect(res.statusCode).toBe(202);
+      const real = (await register("nouveau", "nouveau@example.test")).json();
+      expect({ ...res.json(), username: "" }).toEqual({ ...real, username: "" });
+      const { rows } = await db.query("select 1 from users where username = 'intrus'");
+      expect(rows).toHaveLength(0);
+      expect(sent.slice(before).some((m) => m.to === "Alice@Example.test" && /déjà un compte/.test(m.subject))).toBe(true);
+    });
   });
 
-  it("valide les réglages et recalcule le résumé du dernier export", async () => {
-    const login = await app.inject({ method: "POST", url: "/api/auth/login", payload: { username: "alice", password: "motdepasse1" } });
-    const cookie = cookieOf(login);
-    const bad = await app.inject({ method: "PUT", url: "/api/me/settings", headers: { cookie }, payload: { ...DEFAULT_SETTINGS, focus: "tout" } });
-    expect(bad.statusCode).toBe(400);
-    const ok = await app.inject({ method: "PUT", url: "/api/me/settings", headers: { cookie }, payload: { ...DEFAULT_SETTINGS, focus: "buildings", medals: 1200 } });
-    expect(ok.statusCode).toBe(200);
-    const settings = (await app.inject({ url: "/api/me/settings", headers: { cookie } })).json();
-    expect(settings).toMatchObject({ focus: "buildings", medals: 1200 });
-    const players = (await app.inject({ url: "/api/players", headers: { cookie } })).json();
-    expect(players[0].summary.focus).toBe("buildings");
+  describe("connexion et sessions", () => {
+    it("erreur générique si mauvais mot de passe ou pseudo inconnu", async () => {
+      const wrong = await post("/api/auth/login", { username: "alice", password: "faux-mdp-123" });
+      const ghost = await post("/api/auth/login", { username: "fantome", password: "faux-mdp-123" });
+      expect(wrong.statusCode).toBe(401);
+      expect(ghost.statusCode).toBe(401);
+      expect(wrong.json()).toEqual(ghost.json());
+      const ok = await post("/api/auth/login", { username: "ALICE", password: "motdepasse1" });
+      expect(ok.statusCode).toBe(200);
+      expect(cookieOf(ok)).not.toBe("");
+    });
+
+    it("refuse l'accès sans session ou avec un jeton falsifié", async () => {
+      expect((await req({ url: "/api/players" })).statusCode).toBe(401);
+      expect((await req({ url: "/api/players", cookie: `${COOKIE}=abc.def.ghi` })).statusCode).toBe(401);
+    });
+
+    it("« Se déconnecter partout » ferme toutes les sessions", async () => {
+      const c1 = await signup("bob", "bob@example.test");
+      const c2 = cookieOf(await post("/api/auth/login", { username: "bob", password: "motdepasse1" }));
+      expect((await post("/api/auth/logout-all", {}, c1)).statusCode).toBe(200);
+      expect((await req({ url: "/api/auth/me", cookie: c1 })).statusCode).toBe(401);
+      expect((await req({ url: "/api/auth/me", cookie: c2 })).statusCode).toBe(401);
+    });
+
+    it("déconnexion : le cookie est effacé", async () => {
+      const res = await post("/api/auth/logout", {});
+      expect(res.cookies.find((x) => x.name === COOKIE)?.value).toBe("");
+    });
   });
 
-  it("un autre joueur voit le profil complet, en lecture", async () => {
-    const res = await register("carol");
-    const cookie = cookieOf(res);
-    const profile = await app.inject({ url: "/api/players/alice", headers: { cookie } });
-    expect(profile.statusCode).toBe(200);
-    const p = profile.json();
-    expect(p.username).toBe("Alice");
-    expect(p.settings.focus).toBe("buildings");
-    expect(p.exports).toHaveLength(1);
-    expect((p.exports[0].raw as { tag: string }).tag).toBe("#ANON0001");
-    expect((await app.inject({ url: "/api/players/inconnu", headers: { cookie } })).statusCode).toBe(404);
+  describe("mot de passe oublié", () => {
+    it("même réponse que l'adresse existe ou non", async () => {
+      const known = await post("/api/auth/forgot", { email: "bob@example.test" });
+      const unknown = await post("/api/auth/forgot", { email: "inconnu@example.test" });
+      expect(known.statusCode).toBe(202);
+      expect(unknown.statusCode).toBe(202);
+      expect(known.json()).toEqual(unknown.json());
+      expect(sent.some((m) => m.to === "inconnu@example.test")).toBe(false);
+    });
+
+    it("change le mot de passe avec le code, et ferme les anciennes sessions", async () => {
+      const old = cookieOf(await post("/api/auth/login", { username: "bob", password: "motdepasse1" }));
+      const code = lastCodeFor("bob@example.test")!;
+      expect((await post("/api/auth/reset", { email: "bob@example.test", code: "999999" === code ? "888888" : "999999", password: "nouveau-mdp-1" })).statusCode).toBe(400);
+      const res = await post("/api/auth/reset", { email: "bob@example.test", code, password: "nouveau-mdp-1" });
+      expect(res.statusCode).toBe(200);
+      expect((await req({ url: "/api/auth/me", cookie: old })).statusCode).toBe(401);
+      expect((await req({ url: "/api/auth/me", cookie: cookieOf(res) })).statusCode).toBe(200);
+      expect((await post("/api/auth/login", { username: "bob", password: "motdepasse1" })).statusCode).toBe(401);
+      expect((await post("/api/auth/login", { username: "bob", password: "nouveau-mdp-1" })).statusCode).toBe(200);
+    });
   });
 
-  it("déconnexion : le cookie est effacé", async () => {
-    const res = await app.inject({ method: "POST", url: "/api/auth/logout" });
-    const c = res.cookies.find((x) => x.name === "coc_session");
-    expect(c?.value).toBe("");
+  describe("exports, réglages et potes", () => {
+    let alice: string;
+    beforeAll(async () => {
+      alice = cookieOf(await post("/api/auth/login", { username: "alice", password: "motdepasse1" }));
+    });
+
+    it("enregistre un export sans doublon et l'affiche dans le classement", async () => {
+      expect((await post("/api/exports", { text: "{pas du json" }, alice)).statusCode).toBe(400);
+      for (let i = 0; i < 2; i++) expect((await post("/api/exports", { text: fixture }, alice)).statusCode).toBe(201);
+      const { rows } = await db.query("select count(*)::int as n from exports");
+      expect(rows[0].n).toBe(1);
+      const players = (await req({ url: "/api/players", cookie: alice })).json();
+      expect(players.map((p: { username: string }) => p.username)).toEqual(["Alice"]);
+      expect(players[0].summary).toMatchObject({ tag: "#ANON0001", th: 18 });
+    });
+
+    it("valide les réglages et recalcule le résumé du dernier export", async () => {
+      const bad = await req({ method: "PUT", url: "/api/me/settings", cookie: alice, payload: { ...DEFAULT_SETTINGS, focus: "tout" } });
+      expect(bad.statusCode).toBe(400);
+      const ok = await req({ method: "PUT", url: "/api/me/settings", cookie: alice, payload: { ...DEFAULT_SETTINGS, focus: "buildings", medals: 1200 } });
+      expect(ok.statusCode).toBe(200);
+      expect((await req({ url: "/api/players", cookie: alice })).json()[0].summary.focus).toBe("buildings");
+    });
+
+    it("un pote voit le profil complet ; un compte non confirmé est introuvable", async () => {
+      const carol = await signup("carol", "carol@example.test");
+      const p = (await req({ url: "/api/players/alice", cookie: carol })).json();
+      expect(p.username).toBe("Alice");
+      expect(p.exports).toHaveLength(1);
+      expect((await req({ url: "/api/players/bruteforce", cookie: carol })).statusCode).toBe(404);
+    });
   });
 });
