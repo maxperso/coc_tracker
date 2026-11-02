@@ -33,6 +33,7 @@ export function landingView(a: {
   onDashboard: () => void;
   onFriends: () => void;
   onLogout: () => void;
+  onDemo: () => void;
 }): HTMLElement {
   const left = countdown();
   const end = new Date(JAM.end);
@@ -84,6 +85,7 @@ export function landingView(a: {
               h("button", { type: "button", class: "btn btn-primary btn-lg", onClick: a.onRegister }, "Créer mon compte"),
               h("button", { type: "button", class: "btn btn-ghost btn-lg", onClick: a.onLogin }, "J'ai déjà un compte"),
             ),
+        h("button", { type: "button", class: "link", onClick: a.onDemo }, "Voir une démo sans compte →"),
       ),
       h(
         "div",

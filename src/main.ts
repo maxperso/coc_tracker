@@ -9,11 +9,13 @@ import { api, ApiError } from "./lib/client";
 import { parseExport } from "./lib/exportParse";
 import { gameIndex } from "./lib/gamedata";
 import { snapshotOf, type Snapshot } from "./lib/history";
+import demoExport from "./data/demo.json";
 import { DEFAULT_SETTINGS, type Settings } from "./lib/plan";
 import { effectiveSettings } from "./lib/recommend";
+import { applyTheme, loadTheme, saveTheme, type ThemePref } from "./lib/theme";
 import { buildVillage, type Village } from "./lib/village";
 import { authView, type AuthMode, type AuthState } from "./ui/auth";
-import { dashboardView, tabsFor, type Tab } from "./ui/dashboard";
+import { dashboardView, tabsFor, themeControl, type Tab } from "./ui/dashboard";
 import { h } from "./ui/dom";
 import { homeView } from "./ui/home";
 import { landingView } from "./ui/landing";
@@ -43,7 +45,7 @@ const state: {
   newExport: boolean;
   tab: Tab;
   players: { rows: PlayerRow[] | null; error?: string };
-  friend: (Loaded & { username: string; settings: Settings }) | null;
+  friend: (Loaded & { username: string; settings: Settings; demo?: boolean }) | null;
   friendTab: Tab;
 } = {
   view: "loading",
@@ -58,6 +60,13 @@ const state: {
   friend: null,
   friendTab: "summary",
 };
+
+let theme: ThemePref = loadTheme();
+applyTheme(theme);
+function setTheme(t: ThemePref) {
+  theme = t;
+  saveTheme(t);
+}
 
 const root = document.getElementById("app")!;
 let dialog: HTMLDialogElement | null = null;
@@ -130,6 +139,18 @@ function openMine() {
   state.friend = null;
   state.view = state.mine ? "dash" : "home";
   state.tab = "summary";
+  render();
+  window.scrollTo(0, 0);
+}
+
+/** Démo depuis la page d'accueil : un village anonymisé, en lecture seule. */
+function openDemo() {
+  const r = parseExport(JSON.stringify(demoExport));
+  if (!r.ok) return;
+  const village = buildVillage(r.value, gameIndex());
+  state.friend = { village, history: [snapshotOf(village)], username: "Démo", settings: { ...structuredClone(DEFAULT_SETTINGS), focus: "hybrid" }, demo: true };
+  state.friendTab = "summary";
+  state.view = "profile";
   render();
   window.scrollTo(0, 0);
 }
@@ -338,6 +359,7 @@ function renderView(): void {
             }
           },
           onLogout: () => void logout(),
+          onDemo: openDemo,
         }),
       );
       return;
@@ -408,8 +430,9 @@ function renderView(): void {
     settings: eff.settings,
     purchase: eff.purchase,
     history: loaded.history,
-    me: state.me!,
+    me: state.me ?? "",
     owner,
+    demo: friend?.demo,
     players: state.players,
     tab,
     onTab: (t) => {
@@ -432,10 +455,12 @@ function renderView(): void {
       if (state.mine) goTab("players");
       else render();
     },
-    onMine: openMine,
+    onMine: () => (friend?.demo && !state.me ? openAuth("register") : openMine()),
     onHome: goLanding,
     onLogout: () => void logout(),
     onLogoutAll: () => void logout(true),
+    theme,
+    onTheme: setTheme,
   });
   for (const d of view.querySelectorAll("details")) {
     if (openDetails.has(d.querySelector("h2")?.textContent ?? "")) d.open = true;
@@ -443,9 +468,16 @@ function renderView(): void {
   root.append(view);
 
   if (friend) return;
-  dialog = settingsDialog(state.settings, eff.settings, state.samePass, (s) => void setSettings(s), (same) => {
-    state.samePass = same;
-  });
+  dialog = settingsDialog(
+    state.settings,
+    eff.settings,
+    state.samePass,
+    (s) => void setSettings(s),
+    (same) => {
+      state.samePass = same;
+    },
+    themeControl(theme, setTheme),
+  );
   document.body.append(dialog);
   if (wasOpen) {
     dialog.showModal();

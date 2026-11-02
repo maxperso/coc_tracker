@@ -44,7 +44,15 @@ const checkField = (id: string, label: string, control: HTMLElement, hint?: stri
   h("div", { class: "field field-check" }, control, h("label", { for: id }, label, hint ? h("span", { class: "hint" }, hint) : null));
 
 /** `effective` : réglages réellement utilisés (achats recommandés si le mode automatique est actif). */
-export function settingsDialog(s: Settings, effective: Settings, same: boolean, onChange: Update, onSame: (v: boolean) => void): HTMLDialogElement {
+export function settingsDialog(
+  s: Settings,
+  effective: Settings,
+  same: boolean,
+  onChange: Update,
+  onSame: (v: boolean) => void,
+  /** Choix de l'apparence, affiché en tête des réglages. */
+  appearance?: HTMLElement,
+): HTMLDialogElement {
   const set = (patch: (d: Settings) => void) => {
     const next = structuredClone(s);
     patch(next);
@@ -65,6 +73,7 @@ export function settingsDialog(s: Settings, effective: Settings, same: boolean, 
       "form",
       { method: "dialog", class: "settings-form" },
       h("div", { class: "settings-head" }, h("h2", { id: "settings-title" }, "Réglages"), h("button", { class: "btn btn-ghost", value: "close" }, "Fermer")),
+      appearance ? h("fieldset", null, h("legend", null, "Apparence"), appearance) : null,
 
       h("fieldset", null, h("legend", null, "Pass d'or"),
         field("gp-builder", "Boost ouvrier", select("gp-builder", s.pass.builder, passOptions, (v) => set((d) => { d.pass.builder = v; if (same) d.pass.research = v; }))),

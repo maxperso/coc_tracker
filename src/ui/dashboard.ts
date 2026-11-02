@@ -9,6 +9,7 @@ import { JAM } from "../lib/rules";
 import { byDay, finalWave, longestRemaining, planEvents, type PlanEvent, type Pool } from "../lib/schedule";
 import { levelLaunched, type ChainResult } from "../lib/sim";
 import { fmtDateTime, fmtDay, fmtDayLong, fmtDays, fmtHour, fmtWeekday, hoursBetween, toDate } from "../lib/time";
+import { THEME_LABEL, type ThemePref } from "../lib/theme";
 import type { Village } from "../lib/village";
 import { progressChart } from "./chart";
 import { compact, h, nf } from "./dom";
@@ -16,20 +17,25 @@ import { ganttCard } from "./gantt";
 import { about, comparison, details, exportCheck, historyView, potionPlanView } from "./more";
 import { sleepLabel } from "./sleep";
 import { playersView } from "./players";
+import { icon, type IconName } from "./icons";
 import { sprite } from "./sprite";
 
 export type Tab = "summary" | "plan" | "heroes" | "buildings" | "lab" | "progress" | "players" | "more";
 
-const TAB_LABEL: Record<Tab, string> = {
-  summary: "Dashboard",
-  plan: "Plan",
-  heroes: "Héros",
-  buildings: "Bâtiments",
-  lab: "Labo",
-  progress: "Progression",
-  players: "Amis",
-  more: "Plus",
-};
+/** Navigation principale : 5 entrées. Héros, bâtiments et labo sont regroupés sous « Village ». */
+type NavKey = "summary" | "plan" | "village" | "progress" | "players";
+const NAV: { key: NavKey; label: string; icon: IconName }[] = [
+  { key: "summary", label: "Dashboard", icon: "dashboard" },
+  { key: "plan", label: "Plan", icon: "plan" },
+  { key: "village", label: "Village", icon: "village" },
+  { key: "progress", label: "Progression", icon: "progress" },
+  { key: "players", label: "Amis", icon: "friends" },
+];
+const VILLAGE_TABS: Tab[] = ["heroes", "buildings", "lab"];
+const navOf = (t: Tab): NavKey | null => (VILLAGE_TABS.includes(t) ? "village" : t === "more" ? null : (t as NavKey));
+
+/** Sous-onglet « Village » par défaut : celui de la stratégie. */
+const villageDefault = (s: Settings): Tab => (s.focus === "buildings" ? "buildings" : "heroes");
 
 /** Onglets : le profil d'un ami est en lecture seule, sans « Amis » ni « Plus ». */
 export function tabsFor(s: Settings, readOnly = false): Tab[] {
@@ -63,6 +69,10 @@ export interface DashboardProps {
   onHome: () => void;
   onLogout: () => void;
   onLogoutAll: () => void;
+  theme: ThemePref;
+  onTheme: (t: ThemePref) => void;
+  /** Village de démonstration (page d'accueil), en lecture seule. */
+  demo?: boolean;
 }
 
 const readOnly = (p: DashboardProps) => p.owner.toLowerCase() !== p.me.toLowerCase();
@@ -74,13 +84,35 @@ const pctText = (x: number) => `${Math.floor(x * 100)} %`;
 
 /* ---------- En-tête ---------- */
 
+function navItems(p: DashboardProps, cls: string): HTMLElement[] {
+  const current = navOf(p.tab);
+  return NAV.filter((n) => !(readOnly(p) && n.key === "players")).map((n) =>
+    h(
+      "button",
+      {
+        type: "button",
+        class: cls,
+        "aria-current": n.key === current ? "page" : undefined,
+        onClick: () => p.onTab(n.key === "village" ? (VILLAGE_TABS.includes(p.tab) ? p.tab : villageDefault(p.settings)) : n.key),
+      },
+      icon(n.icon, cls === "bnav-item" ? 22 : 18),
+      h("span", null, n.label),
+    ),
+  );
+}
+
+function iconButton(label: string, name: IconName, onClick: () => void, extraClass = ""): HTMLElement {
+  return h("button", { type: "button", class: `btn btn-icon ${extraClass}`, onClick, title: label, "aria-label": label }, icon(name), h("span", { class: "btn-icon-label" }, label));
+}
+
 function appHeader(p: DashboardProps): HTMLElement {
   const v = p.village;
-  const potion = findByName(gameIndex(), "buildings", "Builder's Hut");
+  const hut = findByName(gameIndex(), "buildings", "Builder's Hut");
+  const ro = readOnly(p);
   return h(
     "header",
     { class: "appbar" },
-    readOnly(p)
+    ro
       ? h(
           "div",
           { class: "friend-banner", role: "status" },
@@ -88,8 +120,10 @@ function appHeader(p: DashboardProps): HTMLElement {
             "div",
             { class: "friend-banner-inner" },
             h("span", { class: "friend-eye", "aria-hidden": "true" }, "👀"),
-            h("span", null, "Tu regardes le village de ", h("strong", null, p.owner), h("span", { class: "friend-ro" }, " · lecture seule")),
-            h("button", { type: "button", class: "btn btn-banner", onClick: p.onMine }, "Revenir à mon village"),
+            p.demo
+              ? h("span", null, "Démo : ", h("strong", null, "un village d'exemple"), h("span", { class: "friend-ro" }, " · lecture seule"))
+              : h("span", null, "Tu regardes le village de ", h("strong", null, p.owner), h("span", { class: "friend-ro" }, " · lecture seule")),
+            h("button", { type: "button", class: "btn btn-banner", onClick: p.onMine }, p.demo ? (p.me ? "Revenir à mon village" : "Créer mon compte") : "Revenir à mon village"),
           ),
         )
       : null,
@@ -99,40 +133,61 @@ function appHeader(p: DashboardProps): HTMLElement {
       h(
         "div",
         { class: "brand", role: "link", tabindex: 0, title: "Accueil", onClick: p.onHome, onKeydown: (e: Event) => (e as KeyboardEvent).key === "Enter" && p.onHome() },
-        potion ? sprite("buildings", potion, potion.levels?.at(-1)?.l, "sm") : null,
+        hut ? sprite("buildings", hut, hut.levels?.at(-1)?.l, "sm") : null,
         h(
           "div",
           null,
-          h("p", { class: "brand-name" }, readOnly(p) ? `Village de ${p.owner}` : "COC Tracker"),
+          h("p", { class: "brand-name" }, p.demo ? "Village d'exemple" : ro ? `Village de ${p.owner}` : "COC Tracker"),
           h("p", { class: "brand-meta" }, `${v.tag} · HDV ${v.th}`),
         ),
       ),
-      readOnly(p)
+      h("nav", { class: "topnav", "aria-label": "Sections" }, navItems(p, "topnav-item")),
+      ro
         ? h(
             "div",
             { class: "appbar-actions" },
             h("span", { class: "btn btn-chip chip-static" }, h("span", { class: "chip-dot" }), FOCUS_LABEL[p.settings.focus]),
-            h("button", { type: "button", class: "btn btn-ghost", onClick: p.onBack }, "← Amis"),
+            p.demo ? null : h("button", { type: "button", class: "btn btn-ghost", onClick: p.onBack }, "Amis"),
           )
         : h(
             "div",
             { class: "appbar-actions" },
             h("button", { type: "button", class: "btn btn-chip", onClick: p.onStrategy, "aria-label": `Stratégie : ${FOCUS_LABEL[p.settings.focus]}. Changer` }, h("span", { class: "chip-dot" }), FOCUS_LABEL[p.settings.focus]),
-            h("button", { type: "button", class: "btn btn-ghost", onClick: p.onSettings }, "Réglages"),
-            h("button", { type: "button", class: "btn btn-ghost hide-sm", onClick: p.onNewExport }, "Nouvel export"),
+            iconButton("Nouvel export", "upload", p.onNewExport),
+            iconButton("Réglages", "settings", p.onSettings),
+            h(
+              "button",
+              { type: "button", class: p.tab === "more" ? "avatar active" : "avatar", onClick: () => p.onTab("more"), title: "Mon compte", "aria-label": `Mon compte (${p.me})` },
+              p.me.slice(0, 1).toUpperCase(),
+            ),
           ),
     ),
-    h(
-      "nav",
-      { class: "tabs", "aria-label": "Sections" },
-      h(
-        "div",
-        { class: "tabs-inner", role: "tablist" },
-        tabsFor(p.settings, readOnly(p)).map((t) =>
-          h("button", { type: "button", role: "tab", class: "tab", "aria-selected": String(t === p.tab), onClick: () => p.onTab(t) }, TAB_LABEL[t]),
-        ),
-      ),
-    ),
+  );
+}
+
+/** Barre de navigation en bas de l'écran, sur téléphone. */
+function bottomNav(p: DashboardProps): HTMLElement {
+  return h("nav", { class: "bnav", "aria-label": "Sections" }, navItems(p, "bnav-item"));
+}
+
+/** Choix Héros / Bâtiments / Labo en haut de l'onglet Village. */
+function villageSwitch(p: DashboardProps): HTMLElement {
+  const order: Tab[] = p.settings.focus === "buildings" ? ["buildings", "heroes", "lab"] : ["heroes", "buildings", "lab"];
+  const label: Record<string, string> = { heroes: "Héros", buildings: "Bâtiments", lab: "Labo et animaux" };
+  const pic: Record<string, [string, string]> = { heroes: ["heroes", "Barbarian King"], buildings: ["buildings", "Cannon"], lab: ["buildings", "Laboratory"] };
+  return h(
+    "div",
+    { class: "village-switch", role: "tablist", "aria-label": "Village" },
+    order.map((t) => {
+      const [cat, name] = pic[t];
+      const e = findByName(gameIndex(), cat, name);
+      return h(
+        "button",
+        { type: "button", role: "tab", class: "vs-item", "aria-selected": String(p.tab === t), onClick: () => p.onTab(t) },
+        e ? h("span", { class: "vs-icon" }, sprite(cat, e, cat === "buildings" ? e.levels?.at(-1)?.l : undefined, "sm")) : null,
+        h("span", null, label[t]),
+      );
+    }),
   );
 }
 
@@ -430,7 +485,7 @@ function summaryTab(p: DashboardProps, f: Forecast): HTMLElement {
     "section",
     { class: "stack" },
     sectionHead(
-      ro ? `Dashboard de ${p.owner}` : "Dashboard",
+      p.demo ? "Dashboard (démo)" : ro ? `Dashboard de ${p.owner}` : "Dashboard",
       `${left ? `Fin du Jam ${left}` : "Le Jam est fini"}, le ${fmtDayLong(new Date(JAM.end))} à ${fmtHour(new Date(JAM.end))}.`,
       estimate(),
     ),
@@ -643,6 +698,7 @@ function heroesTab(p: DashboardProps, f: Forecast): HTMLElement {
   return h(
     "section",
     { class: "stack" },
+    villageSwitch(p),
     sectionHead("Héros", `+${f.heroes.gainedLaunched} ${plural(f.heroes.gainedLaunched, "niveau")} pendant le Jam`, estimate()),
     focusNote,
     rows.length ? ganttCard(rows, v.timestamp, T, v.th, p.settings.sleep) : h("p", { class: "muted" }, "Aucun héros dans cet export."),
@@ -744,6 +800,7 @@ function buildingsTab(p: DashboardProps, f: Forecast): HTMLElement {
   return h(
     "section",
     { class: "stack" },
+    villageSwitch(p),
     sectionHead("Bâtiments", `+${f.buildings.gainedLaunched} ${plural(f.buildings.gainedLaunched, "niveau")} pendant le Jam`, estimate()),
     focusNote,
     walls
@@ -797,6 +854,7 @@ function labTab(p: DashboardProps, f: Forecast): HTMLElement {
   return h(
     "section",
     { class: "stack" },
+    villageSwitch(p),
     sectionHead("Labo et animaux", "Les recherches les plus courtes d'abord, pour gagner le plus de niveaux.", estimate()),
     h("div", { class: "dash-grid" }, queueCard("Labo", f.labBest, p.village.timestamp), queueCard("Animaux", f.pets, p.village.timestamp)),
   );
@@ -829,10 +887,7 @@ function moreTab(p: DashboardProps, f: Forecast): HTMLElement {
   return h(
     "section",
     { class: "stack" },
-    sectionHead("Plus"),
-    details("Planning des potions", true, () => potionPlanView(f, v.timestamp)),
-    details("Contrôle de l'export", v.report.unknown.length > 0, () => exportCheck(v)),
-    details("À propos", false, about),
+    sectionHead("Mon compte"),
     h(
       "section",
       { class: "card account" },
@@ -840,11 +895,39 @@ function moreTab(p: DashboardProps, f: Forecast): HTMLElement {
       h(
         "div",
         { class: "button-row" },
-        h("button", { type: "button", class: "btn btn-ghost", onClick: p.onNewExport }, "Coller un nouvel export"),
-        h("button", { type: "button", class: "btn btn-ghost", onClick: p.onLogout }, "Se déconnecter"),
-        h("button", { type: "button", class: "btn btn-ghost", onClick: p.onLogoutAll }, "Se déconnecter partout"),
+        h("button", { type: "button", class: "btn btn-ghost", onClick: p.onNewExport }, icon("upload"), "Coller un nouvel export"),
+        h("button", { type: "button", class: "btn btn-ghost", onClick: p.onSettings }, icon("settings"), "Réglages"),
       ),
     ),
+    h("section", { class: "card" }, h("h2", { class: "card-title" }, "Apparence"), themeControl(p.theme, p.onTheme)),
+    details("Planning des potions", true, () => potionPlanView(f, v.timestamp)),
+    details("Contrôle de l'export", v.report.unknown.length > 0, () => exportCheck(v)),
+    details("À propos", false, about),
+    h(
+      "div",
+      { class: "button-row" },
+      h("button", { type: "button", class: "btn btn-ghost", onClick: p.onLogout }, "Se déconnecter"),
+      h("button", { type: "button", class: "btn btn-ghost", onClick: p.onLogoutAll }, "Se déconnecter partout"),
+    ),
+  );
+}
+
+/** Choix de l'apparence : Système, Clair, Sombre. */
+export function themeControl(current: ThemePref, onTheme: (t: ThemePref) => void): HTMLElement {
+  const prefs: ThemePref[] = ["system", "light", "dark"];
+  const buttons = prefs.map((t) => {
+    const b = h("button", { type: "button", role: "radio", class: "seg-btn", "aria-checked": String(t === current) }, THEME_LABEL[t]);
+    b.addEventListener("click", () => {
+      buttons.forEach((x) => x.setAttribute("aria-checked", String(x === b)));
+      onTheme(t);
+    });
+    return b;
+  });
+  return h(
+    "div",
+    { class: "theme-control" },
+    h("div", { class: "segmented seg-3", role: "radiogroup", "aria-label": "Apparence" }, buttons),
+    h("p", { class: "hint" }, "« Système » suit le réglage clair ou sombre de ton appareil."),
   );
 }
 
@@ -880,6 +963,7 @@ export function dashboardView(p: DashboardProps): HTMLElement {
     appHeader(p),
     ro ? h("div", { class: "friend-frame", "aria-hidden": "true" }) : null,
     h("main", { class: "page dash" }, h("p", { class: "eyebrow" }, `Export du ${fmtDateTime(toDate(v.timestamp, 0))} · heure de Paris`), body),
+    bottomNav(p),
   );
 }
 
