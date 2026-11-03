@@ -19,6 +19,13 @@ export interface Release {
 
 export const CHANGELOG: Release[] = [
   {
+    id: 6,
+    date: "2026-11-03",
+    changes: [
+      { kind: "bug", text: "Classement des amis : par HDV d'abord, puis par complétion de l'HDV. Un HDV 17 ne passe plus devant un HDV 18." },
+    ],
+  },
+  {
     id: 5,
     date: "2026-11-03",
     changes: [

@@ -356,9 +356,10 @@ export async function buildApp(cfg: Config, db: Db, mailer: Mailer, push: PushSe
        order by u.id, e.exported_at desc`,
     );
     const out: PlayerRow[] = rows.map((r) => ({ username: r.username, summary: r.summary, updatedAt: r.created_at.toISOString() }));
-    // Classement sur le jeu entier : un HDV 17 au max ne passe pas devant un HDV 18 plus avancé que lui.
-    const game = (r: PlayerRow) => r.summary.pct.game ?? r.summary.pct.global;
-    return out.sort((a, b) => game(b) - game(a) || b.summary.pct.global - a.summary.pct.global);
+    // Classement par HDV d'abord (un HDV 17, même au max, reste derrière les HDV 18), puis par
+    // complétion de l'HDV. Le « jeu complet » ne suffit pas : animaux et équipements, peu liés à l'HDV,
+    // pèsent autant que les héros et les bâtiments.
+    return out.sort((a, b) => b.summary.th - a.summary.th || b.summary.pct.global - a.summary.pct.global);
   });
 
   app.get<{ Params: { username: string } }>("/api/players/:username", { preHandler: requireUser }, async (req, reply) => {

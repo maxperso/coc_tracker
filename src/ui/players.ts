@@ -12,13 +12,15 @@ export function playersView(opts: { rows: PlayerRow[] | null; error?: string; me
   if (opts.error) return h("p", { class: "alert" }, opts.error);
   if (!opts.rows) return h("p", { class: "muted" }, "Chargement…");
   if (!opts.rows.length) return h("p", { class: "muted" }, "Personne n'a encore envoyé d'export.");
+  // Le serveur classe par HDV puis par complétion : un titre à chaque nouvel HDV.
   return h(
     "ol",
     { class: "players" },
-    opts.rows.map((r, i) => {
+    opts.rows.flatMap((r, i) => {
       const s = r.summary;
       const isMe = r.username.toLowerCase() === opts.me.toLowerCase();
-      return h(
+      const head = i === 0 || opts.rows![i - 1].summary.th !== s.th ? h("li", { class: "players-th", "aria-hidden": "true" }, `HDV ${s.th}`) : null;
+      const row = h(
         "li",
         null,
         h(
@@ -29,17 +31,18 @@ export function playersView(opts: { rows: PlayerRow[] | null; error?: string; me
             "span",
             { class: "player-main" },
             h("span", { class: "player-name" }, r.username, isMe ? h("span", { class: "badge" }, "toi") : null),
-            h("span", { class: "hint" }, `HDV ${s.th} complété à ${pctText(s.pct.global)} · ${FOCUS_LABEL[s.focus]} · export du ${fmtDateTime(new Date(s.timestamp * 1000))}`),
-            h("span", { class: "bar", role: "img", "aria-label": `Jeu complet : ${pctText(gamePct(s))}` }, h("span", { style: { width: `${gamePct(s) * 100}%` } })),
+            h("span", { class: "hint" }, `HDV ${s.th} · jeu complet ${pctText(gamePct(s))} · ${FOCUS_LABEL[s.focus]} · export du ${fmtDateTime(new Date(s.timestamp * 1000))}`),
+            h("span", { class: "bar", role: "img", "aria-label": `HDV ${s.th} complété à ${pctText(s.pct.global)}` }, h("span", { style: { width: `${s.pct.global * 100}%` } })),
           ),
           h(
             "span",
             { class: "player-stats" },
-            h("span", { class: "player-pct", title: "Complétion du jeu entier" }, pctText(gamePct(s))),
+            h("span", { class: "player-pct", title: `Complétion de l'HDV ${s.th}` }, pctText(s.pct.global)),
             h("span", { class: "hint" }, `+${s.plan.heroes} héros · +${s.plan.buildings} bât.`),
           ),
         ),
       );
+      return head ? [head, row] : [row];
     }),
   );
 }

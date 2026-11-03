@@ -1422,7 +1422,7 @@ export function friendsSection(players: HTMLElement): HTMLElement {
   return h(
     "section",
     { class: "stack", "aria-labelledby": "friends-title" },
-    h("div", null, h("h2", { id: "friends-title", class: "section-title" }, "Amis"), h("p", { class: "muted" }, "Classés par avancement du village. Touche un joueur pour voir son plan.")),
+    h("div", null, h("h2", { id: "friends-title", class: "section-title" }, "Amis"), h("p", { class: "muted" }, "Classés par HDV, puis par avancement de l'HDV. Touche un joueur pour voir son plan.")),
     players,
   );
 }
