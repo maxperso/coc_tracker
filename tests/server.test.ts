@@ -89,7 +89,7 @@ describe.skipIf(!url)("API", () => {
       expect(res.headers["cross-origin-opener-policy"]).toBe("same-origin");
     });
     it("indique si un code d'invitation est demandé", async () => {
-      expect((await req({ url: "/api/auth/config" })).json()).toEqual({ inviteRequired: true });
+      expect((await req({ url: "/api/auth/config" })).json()).toEqual({ inviteRequired: true, devLogin: null });
     });
     it("refuse une écriture d'une autre origine ou d'un autre site", async () => {
       const a = await req({ method: "POST", url: "/api/auth/login", headers: { origin: "https://pirate.example" }, payload: { username: "x", password: "y" } });
@@ -324,7 +324,7 @@ describe.skipIf(!url)("API", () => {
     it("supprime un abonnement expiré et teste l'envoi", async () => {
       await post("/api/push/subscribe", sub("https://fcm.googleapis.com/fcm/send/gone-1"), dan);
       const res = await post("/api/push/test", {}, dan);
-      expect(res.json()).toEqual({ sent: 1 });
+      expect(res.json()).toEqual({ sent: 1, failed: [] });
       const { rows } = await db.query("select endpoint from push_subscriptions");
       expect(rows.map((r) => r.endpoint)).toEqual(["https://fcm.googleapis.com/fcm/send/dan1"]);
     });
