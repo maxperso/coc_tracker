@@ -9,6 +9,7 @@ import type { BacklogItem, BacklogTicket } from "./lib/backlog";
 import { createSaver } from "./lib/saver";
 import { LATEST_RELEASE, unseenReleases } from "./lib/changelog";
 import { whatsNewDialog } from "./ui/whatsNew";
+import { medalsPrompt } from "./ui/medalsPrompt";
 import { api, ApiError } from "./lib/client";
 import { parseExport } from "./lib/exportParse";
 import { gameIndex } from "./lib/gamedata";
@@ -314,19 +315,45 @@ async function submitExport(text: string) {
     document.getElementById("export-input")?.focus();
     return;
   }
+  // Premier export : le questionnaire complet. Ensuite, les réglages sont gardés.
+  const first = !state.mine;
   try {
     await api.uploadExport(text.trim());
     const profile = await api.profile(state.me!);
     state.mine = loadProfile(profile);
     state.homeError = undefined;
-    state.newExport = true;
     state.tab = "summary";
-    state.view = "onboarding";
+    if (first || !state.mine) {
+      state.newExport = true;
+      state.view = "onboarding";
+    } else {
+      state.view = "dash";
+      askMedals(state.mine.village);
+    }
   } catch (e) {
     state.homeError = handleError(e);
   }
   render();
   window.scrollTo(0, 0);
+}
+
+/** Nouvel export : seule question, les médailles de ligue (pré-remplies, on peut garder). */
+function askMedals(village: Village) {
+  const dlg = medalsPrompt({
+    village,
+    settings: state.settings,
+    onDone: (medals) => {
+      if (medals !== undefined) setSettings({ ...state.settings, medals }, true);
+    },
+    onReview: () => {
+      state.newExport = true;
+      state.view = "onboarding";
+      render();
+      window.scrollTo(0, 0);
+    },
+  });
+  document.body.append(dlg);
+  dlg.showModal();
 }
 
 /** Message bref en bas de l'écran (enregistrement raté…). */

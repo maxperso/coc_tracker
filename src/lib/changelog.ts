@@ -19,6 +19,13 @@ export interface Release {
 
 export const CHANGELOG: Release[] = [
   {
+    id: 2,
+    date: "2026-11-03",
+    changes: [
+      { kind: "ui", text: "Nouvel export : tes réglages sont gardés. Plus de questionnaire, juste tes médailles de ligue à confirmer (merci Axel pour l'idée)." },
+    ],
+  },
+  {
     id: 1,
     date: "2026-11-03",
     changes: [

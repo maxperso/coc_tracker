@@ -3918,3 +3918,15 @@ select.input {
     bottom: calc(76px + env(safe-area-inset-bottom));
   }
 }
+
+/* ---------- Nouvel export : médailles ---------- */
+.mp-actions {
+  flex-direction: row-reverse;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+/* Le lien passe à gauche, les boutons restent à droite. */
+.mp-actions .link {
+  margin-right: auto;
+}
