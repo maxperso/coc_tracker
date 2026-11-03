@@ -19,6 +19,14 @@ export interface Release {
 
 export const CHANGELOG: Release[] = [
   {
+    id: 5,
+    date: "2026-11-03",
+    changes: [
+      { kind: "feature", text: "Deux complétions : celle de ton HDV et celle du jeu entier. Le classement des amis se fait sur le jeu entier : un HDV 17 au max ne passe plus devant un HDV 18." },
+      { kind: "bug", text: "Les bâtiments fusionnés (canon ricochet, tour multi-archers, tour multi-armes, super tour de sorciers) et l'aigle absorbé par l'HDV 17 sont bien comptés dans le pourcentage." },
+    ],
+  },
+  {
     id: 4,
     date: "2026-11-03",
     changes: [

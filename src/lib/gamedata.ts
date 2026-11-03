@@ -32,6 +32,10 @@ export interface GameData {
   source: { repo: string; license: string; commit: string; commitDate: string; syncedAt: string };
   categories: Record<string, Entry[]>;
   sprites: string[];
+  /** HDV le plus haut du jeu. */
+  maxTh: number;
+  /** Exemplaires de chaque bâtiment ou piège selon l'HDV : `thCounts[id][hdv]`. */
+  thCounts: Record<string, number[]>;
 }
 
 export const GAME_DATA = raw as unknown as GameData;

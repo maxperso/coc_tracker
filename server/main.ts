@@ -2,6 +2,7 @@ import { buildApp } from "./app";
 import { loadConfig } from "./config";
 import { createPool, migrate } from "./db";
 import { seedDev } from "./dev";
+import { refreshSummaries } from "./summaries";
 import { consoleMailer, smtpMailer } from "./mailer";
 import { startScheduler, webPushSender } from "./push";
 
@@ -43,6 +44,11 @@ if (!push) console.warn("Pas de clés VAPID : les notifications push sont désac
 
 const app = await buildApp(cfg, db, mailer, push);
 await app.listen({ port: cfg.port, host: cfg.host });
+// En fond : le site répond pendant ce calcul.
+refreshSummaries(db).then(
+  (n) => n && console.log(`${n} résumé(s) de joueur recalculé(s).`),
+  (e) => console.error("Recalcul des résumés impossible :", e),
+);
 const stopScheduler = push ? startScheduler(db, push, (msg, err) => app.log.error({ err }, msg)) : () => {};
 
 for (const sig of ["SIGINT", "SIGTERM"] as const) {

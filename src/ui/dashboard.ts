@@ -487,10 +487,11 @@ function summaryTab(p: DashboardProps, f: Forecast): HTMLElement {
   const points = progressCurve(v, f);
   const endPoint = points.reduce((b, q) => (Math.abs(q.t - T) < Math.abs(b.t - T) ? q : b));
   const g = globalPct(cats);
+  const game = globalPct(progress(v, "game"));
   const rows = p.players.rows ?? [];
   const rank = rows.findIndex((r) => r.username.toLowerCase() === p.owner.toLowerCase());
   const tiles = [
-    tile("Village", pctText(g), `environ ${pctText(endPoint.global)} à la fin du Jam`, go("progress")),
+    tile(`HDV ${v.th}`, pctText(g), `jeu complet ${pctText(game)} · environ ${pctText(endPoint.global)} à la fin du Jam`, go("progress")),
     s.focus !== "buildings" || f.heroes.gainedLaunched
       ? tile("Héros", `+${f.heroes.gainedLaunched}`, `${plural(f.heroes.gainedLaunched, "niveau")}, ${afterJam(f.heroes)}`, go("heroes"))
       : null,
@@ -1299,6 +1300,8 @@ function compareTab(p: DashboardProps, f: Forecast): HTMLElement {
   const mine = forecast(c.village, c.settings);
   const catsMe = progress(c.village);
   const catsThem = progress(p.village);
+  const gameMe = globalPct(progress(c.village, "game"));
+  const gameThem = globalPct(progress(p.village, "game"));
   const endPct = (v: Village, fc: Forecast) => {
     const pts = progressCurve(v, fc);
     return pts.reduce((b, q) => (Math.abs(q.t - fc.heroes.tHours) < Math.abs(b.t - fc.heroes.tHours) ? q : b)).global;
@@ -1310,10 +1313,16 @@ function compareTab(p: DashboardProps, f: Forecast): HTMLElement {
     "div",
     { class: "vs-head" },
     [
-      [c.me, globalPct(catsMe), endPct(c.village, mine), "me"],
-      [p.owner, globalPct(catsThem), endPct(p.village, f), "them"],
-    ].map(([name, now, end, cls]) =>
-      h("div", { class: `card vs-card vs-${cls}` }, h("p", { class: "tile-label" }, String(name)), h("p", { class: "tile-value" }, pctText(Number(now))), h("p", { class: "tile-sub" }, `environ ${pctText(Number(end))} à la fin du Jam`)),
+      [c.me, gameMe, c.village.th, globalPct(catsMe), endPct(c.village, mine), "me"],
+      [p.owner, gameThem, p.village.th, globalPct(catsThem), endPct(p.village, f), "them"],
+    ].map(([name, game, th, now, end, cls]) =>
+      h(
+        "div",
+        { class: `card vs-card vs-${cls}` },
+        h("p", { class: "tile-label" }, String(name)),
+        h("p", { class: "tile-value", title: "Complétion du jeu entier" }, pctText(Number(game))),
+        h("p", { class: "tile-sub" }, `jeu complet · HDV ${th} à ${pctText(Number(now))}, environ ${pctText(Number(end))} à la fin du Jam`),
+      ),
     ),
   );
 

@@ -8,6 +8,7 @@ import { buildApp } from "../server/app";
 import { loadConfig } from "../server/config";
 import { createPool, migrate, type Db } from "../server/db";
 import { seedDev } from "../server/dev";
+import { refreshSummaries } from "../server/summaries";
 import type { Mail } from "../server/mailer";
 import { isAllowedEndpoint, rebuildQueue, sendDue, type PushSubscriptionRow } from "../server/push";
 import { LATEST_RELEASE } from "../src/lib/changelog";
@@ -536,6 +537,19 @@ describe.skipIf(!url)("API", () => {
     it("n'existe pas sans DEV_LOGIN", async () => {
       expect((await req({ url: "/api/auth/me" })).statusCode).toBe(401);
       expect((await req({ url: "/api/auth/config" })).json().devLogin).toBeNull();
+    });
+  });
+
+  describe("complétion du jeu entier", () => {
+    it("recalcule les anciens résumés et classe sur le jeu entier", async () => {
+      const alice = cookieOf(await post("/api/auth/login", { username: "alice", password: "motdepasse1" }));
+      // Résumé d'avant : sans le chiffre du jeu entier.
+      await db.query("update exports set summary = summary #- '{pct,game}'");
+      expect(await refreshSummaries(db)).toBeGreaterThan(0);
+      expect(await refreshSummaries(db)).toBe(0);
+      const players = (await req({ url: "/api/players", cookie: alice })).json();
+      for (const p of players) expect(p.summary.pct.game).toBeGreaterThan(0);
+      for (let i = 1; i < players.length; i++) expect(players[i - 1].summary.pct.game).toBeGreaterThanOrEqual(players[i].summary.pct.game);
     });
   });
 });

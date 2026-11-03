@@ -11,7 +11,8 @@ export interface PlayerSummary {
   th: number;
   timestamp: number;
   focus: Focus;
-  pct: { global: number; heroes: number; buildings: number };
+  /** `global` : par rapport au max de son HDV ; `game` : au jeu entier (sert au classement). */
+  pct: { global: number; game: number; heroes: number; buildings: number };
   /** Niveaux prévus pendant le Jam avec les réglages du joueur. */
   plan: { heroes: number; buildings: number; lab: number };
 }
@@ -34,7 +35,7 @@ export function summarize(v: Village, settings: Settings): PlayerSummary {
     th: v.th,
     timestamp: v.timestamp,
     focus: settings.focus,
-    pct: { global: globalPct(cats), heroes: by("heroes"), buildings: by("buildings") },
+    pct: { global: globalPct(cats), game: globalPct(progress(v, "game")), heroes: by("heroes"), buildings: by("buildings") },
     plan: { heroes: f.heroes.gainedLaunched, buildings: f.buildings.gainedLaunched, lab: f.labBest.gainedLaunched },
   };
 }

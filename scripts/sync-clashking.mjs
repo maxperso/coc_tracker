@@ -80,6 +80,39 @@ for (const [cat, list] of Object.entries(raw)) {
   });
 }
 
+// Nombre de chaque bâtiment ou piège selon le niveau d'HDV (cumul des « unlocks » de l'Hôtel de ville) :
+// thCounts[id][n] = exemplaires à l'HDV n. Sert au pourcentage de complétion (HDV et jeu entier).
+const townHall = raw.buildings.find((e) => e.name === "Town Hall" && e.village === "home");
+const maxTh = Math.max(...townHall.levels.map((l) => l.level));
+const thCounts = {};
+for (const lv of [...townHall.levels].sort((a, b) => a.level - b.level)) {
+  for (const u of lv.unlocks ?? []) {
+    const row = (thCounts[u._id] ??= Array(maxTh + 1).fill(0));
+    for (let n = lv.level; n <= maxTh; n++) row[n] += u.quantity;
+  }
+}
+
+// Fusions (HDV 16+) : un bâtiment fusionné consomme ses bâtiments d'origine (2 canons → 1 canon ricochet),
+// et l'HDV 17 absorbe l'Aigle d'artillerie. On retire ces exemplaires des comptes.
+const merged = [];
+for (const e of [...raw.buildings, ...raw.traps]) {
+  if (e.name === "Town Hall") continue;
+  const req = e.levels?.find((l) => l.merge_requirement?.length)?.merge_requirement;
+  if (req) merged.push({ id: e._id, req });
+}
+const base = Object.fromEntries(Object.entries(thCounts).map(([id, row]) => [id, [...row]]));
+for (const { id, req } of merged) {
+  for (const r of req) {
+    for (let n = 0; n <= maxTh; n++) thCounts[r._id][n] -= base[id]?.[n] ?? 0;
+  }
+}
+for (const lv of townHall.levels) {
+  for (const r of lv.merge_requirement ?? []) {
+    for (let n = lv.level; n <= maxTh; n++) thCounts[r._id][n] -= 1;
+  }
+}
+for (const row of Object.values(thCounts)) row.forEach((x, n) => (row[n] = Math.max(0, x)));
+
 // Sprites : chemins relatifs à assets/, tels que documentés par ClashKing.
 function spritePaths(cat, e) {
   const n = cleanName(e.name);
@@ -125,6 +158,6 @@ for (const p of [
 mkdirSync(join(root, "src", "data"), { recursive: true });
 writeFileSync(
   join(root, "src", "data", "gamedata.json"),
-  JSON.stringify({ source, categories, sprites: available.sort() }),
+  JSON.stringify({ source, categories, sprites: available.sort(), maxTh, thCounts }),
 );
 console.log(`ClashKing ${source.commit.slice(0, 7)} : ${Object.keys(categories).length} catégories, ${available.length} sprites copiés.`);

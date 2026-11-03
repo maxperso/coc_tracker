@@ -4,6 +4,8 @@ import { fmtDateTime } from "../lib/time";
 import { h } from "./dom";
 
 const pctText = (x: number) => `${Math.floor(x * 100)} %`;
+/** Complétion du jeu entier ; un ancien résumé sans ce chiffre retombe sur celui de l'HDV. */
+export const gamePct = (s: PlayerRow["summary"]) => s.pct.game ?? s.pct.global;
 
 /** Classement des joueurs : un clic ouvre le profil complet en lecture. */
 export function playersView(opts: { rows: PlayerRow[] | null; error?: string; me: string; onOpen: (username: string) => void }): HTMLElement {
@@ -27,13 +29,13 @@ export function playersView(opts: { rows: PlayerRow[] | null; error?: string; me
             "span",
             { class: "player-main" },
             h("span", { class: "player-name" }, r.username, isMe ? h("span", { class: "badge" }, "toi") : null),
-            h("span", { class: "hint" }, `HDV ${s.th} · ${FOCUS_LABEL[s.focus]} · export du ${fmtDateTime(new Date(s.timestamp * 1000))}`),
-            h("span", { class: "bar", role: "img", "aria-label": `Village : ${pctText(s.pct.global)}` }, h("span", { style: { width: `${s.pct.global * 100}%` } })),
+            h("span", { class: "hint" }, `HDV ${s.th} complété à ${pctText(s.pct.global)} · ${FOCUS_LABEL[s.focus]} · export du ${fmtDateTime(new Date(s.timestamp * 1000))}`),
+            h("span", { class: "bar", role: "img", "aria-label": `Jeu complet : ${pctText(gamePct(s))}` }, h("span", { style: { width: `${gamePct(s) * 100}%` } })),
           ),
           h(
             "span",
             { class: "player-stats" },
-            h("span", { class: "player-pct" }, pctText(s.pct.global)),
+            h("span", { class: "player-pct", title: "Complétion du jeu entier" }, pctText(gamePct(s))),
             h("span", { class: "hint" }, `+${s.plan.heroes} héros · +${s.plan.buildings} bât.`),
           ),
         ),
