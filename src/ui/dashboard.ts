@@ -116,6 +116,10 @@ export interface DashboardProps {
 
 const readOnly = (p: DashboardProps) => p.owner.toLowerCase() !== p.me.toLowerCase();
 
+/** « Achète-en 2 juste avant (5 en stock) » : le stock supposé reste visible, pour le corriger s'il est faux. */
+const stockLine = (buy: number, stock: number) =>
+  buy ? `Achète-en ${buy} juste avant (${stock} en stock)` : `Avec ton stock (${stock} en stock)`;
+
 /** Fiche d'un élément du plan (niveaux à venir, durées, coûts), ouverte sur le niveau `toLevel`. */
 function openInfo(p: DashboardProps, r: ChainResult, toLevel: number) {
   const c = r.chain;
@@ -381,7 +385,7 @@ function todos(f: Forecast, v: Village): Todo[] {
     out.push({
       icon: null,
       text: `Bois ${today.starts.length} potion${today.starts.length > 1 ? "s" : ""} d'ouvrier dès ${fmtHour(toDate(v.timestamp, today.starts[0]))}`,
-      sub: today.bought ? `${today.bought} à acheter avec tes médailles` : "Avec ton stock",
+      sub: stockLine(today.bought, today.stockAfter + today.starts.length - today.bought),
       key: `P:builder:${today.day}`,
       ask: { kind: "potion", label: "Potions d'ouvrier", plannedAt: v.timestamp + Math.round(today.starts[0] * 3600), count: today.starts.length, exportUnix: v.timestamp },
     });
@@ -820,7 +824,7 @@ function eventRow(p: DashboardProps, e: PlanEvent, exportUnix: number, T: number
       { class: `ev ev-potion${done}` },
       h("span", { class: "ev-time" }, when),
       h("img", { class: "sprite sprite-sm", src: `sprites/magic_items/${POTION_SPRITE[e.pool]}.webp`, alt: "" }),
-      h("div", { class: "ev-main" }, h("p", { class: "ev-text" }, `Bois ${e.count} potion${e.count > 1 ? "s" : ""} ${POTION_LABEL[e.pool]}`), e.buy ? h("p", { class: "hint" }, `Achète-en ${e.buy} juste avant`) : null),
+      h("div", { class: "ev-main" }, h("p", { class: "ev-text" }, `Bois ${e.count} potion${e.count > 1 ? "s" : ""} ${POTION_LABEL[e.pool]}`), h("p", { class: "hint" }, stockLine(e.buy, e.stock))),
       doneBox(p, key, `potions ${POTION_LABEL[e.pool]}`, () => li, onToggle, {
         kind: "potion",
         label: `Potions ${POTION_LABEL[e.pool]}`,

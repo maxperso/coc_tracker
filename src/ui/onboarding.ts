@@ -6,6 +6,7 @@ import type { Village } from "../lib/village";
 import { h } from "./dom";
 import { icon as svgIcon } from "./icons";
 import { sleepControl } from "./sleep";
+import { stockFields, withStock } from "./stockFields";
 import { sprite } from "./sprite";
 
 const CHOICES: { focus: Focus; title: string; text: string; icons: [string, string][] }[] = [
@@ -106,6 +107,7 @@ export function onboardingView(opts: {
     value: opts.askMedals ? "" : String(draft.medals),
     "aria-describedby": "ob-medals-hint",
   });
+  const stock = stockFields("ob-stock", draft);
   const goblin = h("input", { type: "checkbox", id: "ob-goblin", class: "checkbox", checked: draft.goblinBuilder });
   goblin.addEventListener("change", () => (draft.goblinBuilder = goblin.checked));
 
@@ -129,6 +131,7 @@ export function onboardingView(opts: {
       h("div", { class: "field-check" }, goblin, h("label", { for: "ob-goblin" }, "J'ai aussi un ouvrier gobelin")),
       h("div", { class: "form-row" }, h("label", { class: "form-label", for: "ob-medals" }, "Médailles de ligue sur ton compte"), medals),
       h("p", { class: "hint", id: "ob-medals-hint" }, `Au moment de l'export, ${JAM.medalCap} au plus. Le plan te dira quoi acheter avec.`),
+      stock.el,
     ),
     h(
       "div",
@@ -176,7 +179,7 @@ export function onboardingView(opts: {
           return;
         }
         draft.medals = Math.min(JAM.medalCap, Math.max(0, Math.floor(Number(medals.value) || 0)));
-        opts.onDone(draft);
+        opts.onDone(withStock(draft, stock.read()));
       },
     },
     dots,

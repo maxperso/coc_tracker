@@ -361,8 +361,8 @@ function askMedals(village: Village) {
   const dlg = medalsPrompt({
     village,
     settings: state.settings,
-    onDone: (medals) => {
-      if (medals !== undefined) setSettings({ ...state.settings, medals }, true);
+    onDone: (next) => {
+      if (next) setSettings(next, true);
     },
     onReview: () => {
       state.newExport = true;

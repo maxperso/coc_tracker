@@ -19,6 +19,13 @@ export interface Release {
 
 export const CHANGELOG: Release[] = [
   {
+    id: 11,
+    date: "2026-11-03",
+    changes: [
+      { kind: "bug", text: "Potions à acheter : le plan supposait 5 potions de chaque en stock. Ton stock est maintenant demandé à chaque export (l'export du jeu ne le contient pas) et affiché sur chaque ligne de potions." },
+    ],
+  },
+  {
     id: 10,
     date: "2026-11-03",
     changes: [

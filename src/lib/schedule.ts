@@ -7,7 +7,8 @@ export type Pool = "builder" | "lab" | "pet";
 
 export type PlanEvent =
   | { t: number; kind: "launch"; pool: Pool; result: ChainResult; seg: Segment }
-  | { t: number; kind: "potion"; pool: Pool; count: number; buy: number }
+  /** `stock` : potions en stock juste avant de boire (d'après le stock déclaré et les jours d'avant). */
+  | { t: number; kind: "potion"; pool: Pool; count: number; buy: number; stock: number }
   /** Attaque de Ligue de clans : les héros emmenés sont libres. */
   | { t: number; kind: "attack"; pool: Pool; heroes: ChainResult[] };
 
@@ -26,7 +27,7 @@ export function planEvents(f: Forecast): PlanEvent[] {
   };
   const potions = (pf: PoolForecast, pool: Pool) => {
     for (const d of pf.plan.days) {
-      if (d.starts.length) events.push({ t: d.starts[0], kind: "potion", pool, count: d.starts.length, buy: d.bought });
+      if (d.starts.length) events.push({ t: d.starts[0], kind: "potion", pool, count: d.starts.length, buy: d.bought, stock: d.stockAfter + d.starts.length - d.bought });
     }
   };
   launches([...f.heroes.results, ...f.buildings.results], "builder");

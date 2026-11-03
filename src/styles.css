@@ -4390,3 +4390,26 @@ select.input {
 .ui-table tr.is-focus th {
   box-shadow: inset 3px 0 0 var(--done);
 }
+
+/* ---------- Potions en stock ---------- */
+.stock-fields {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.stock-field label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.stock-field .input {
+  width: 100%;
+}
+
+.sprite-xs {
+  width: 22px;
+  height: 22px;
+  object-fit: contain;
+}
