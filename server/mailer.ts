@@ -36,7 +36,20 @@ export const consoleMailer: Mailer = {
 
 const SIGN = "\n\n— COC Tracker\nSi tu n'es pas à l'origine de cette demande, ignore ce message.";
 
+/** Notifications : on dit pourquoi on écrit et comment arrêter. */
+const NOTIFY_SIGN = "\n\n— COC Tracker\nTu reçois ce message parce que tu as créé ce ticket. Pour ne plus en recevoir : Mon compte › Emails.";
+
 export const mails = {
+  ticketDeployed: (to: string, username: string, title: string, link: string): Mail => ({
+    to,
+    subject: `Déployé : ${title}`,
+    text: `Salut ${username},\n\nTon ticket « ${title} » est passé en Déployé : c'est en ligne sur COC Tracker.\nVérifie que ça marche chez toi, puis valide-le :\n${link}${NOTIFY_SIGN}`,
+  }),
+  ticketComment: (to: string, username: string, author: string, title: string, excerpt: string, link: string): Mail => ({
+    to,
+    subject: `${author} a commenté « ${title} »`,
+    text: `Salut ${username},\n\n${author} a commenté ton ticket « ${title} » :\n\n${excerpt}\n\nRépondre :\n${link}${NOTIFY_SIGN}`,
+  }),
   verify: (to: string, username: string, code: string): Mail => ({
     to,
     subject: `${code} : ton code COC Tracker`,

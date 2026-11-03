@@ -8,6 +8,8 @@ export interface MeResponse {
   username: string;
   /** Administrateur : déplace et modère les tickets du backlog. */
   admin: boolean;
+  /** Emails quand un de ses tickets est déployé ou commenté. */
+  backlogEmails: boolean;
 }
 
 export interface AuthConfigResponse {

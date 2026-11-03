@@ -1,11 +1,14 @@
-import { displayName, maxLevel, type Entry } from "../lib/gamedata";
+import { GROUP_LABEL, groupOf, isPermanentBuilding, priorityRank, type BuildingGroup } from "../lib/buildings";
+import { displayName, gameIndex, HERO_SHORT, maxLevel, type Entry } from "../lib/gamedata";
 import type { Forecast } from "../lib/plan";
 import { globalPct, pct, progress, progressAt, progressCurve, type CategoryKey, type CategoryProgress } from "../lib/progress";
-import { levelLaunched, type ChainResult } from "../lib/sim";
+import type { GoldPass } from "../lib/rules";
+import { levelLaunched, type ChainResult, type Segment } from "../lib/sim";
 import type { Village } from "../lib/village";
 import { progressChart, type HistoryDot } from "./chart";
 import { h, nf } from "./dom";
 import { sprite } from "./sprite";
+import { openUpgradeInfo } from "./upgradeInfo";
 
 type Target = "heroes" | "buildings" | "lab";
 
@@ -17,6 +20,8 @@ export interface ProgressionProps {
   onOpen: (t: Target) => void;
   /** Bloc « Gains depuis le dernier export ». */
   extra?: HTMLElement;
+  /** Pass d'or, pour les durées et coûts des fiches. */
+  pass: GoldPass;
 }
 
 const pctText = (x: number) => `${Math.floor(x * 100)} %`;
@@ -67,7 +72,26 @@ function categoryCard(now: CategoryProgress, end: CategoryProgress, onOpen: Prog
     : h("div", { class: "card pg-cat" }, body);
 }
 
-/* ---------- Labo et animaux, recherche par recherche ---------- */
+/* ---------- Détail : héros, bâtiments, labo et animaux ---------- */
+
+/** Une ligne du détail : un élément (tous les exemplaires d'un bâtiment ensemble). */
+interface Row {
+  category: string;
+  entry: Entry;
+  /** Niveaux des exemplaires construits. */
+  lvls: number[];
+  /** Niveaux gagnés pendant le Jam (lancés avant la fin), tous exemplaires confondus. */
+  gained: number;
+  max: number;
+  /** Exemplaires possibles à cet HDV (bâtiments) ; absent : un seul. */
+  allowed?: number;
+  planned: Segment[];
+}
+
+interface Group {
+  label: string;
+  rows: Row[];
+}
 
 const LAB_GROUPS: { label: string; match: (category: string, e: Entry) => boolean }[] = [
   { label: "Troupes", match: (c, e) => c === "troops" && e.productionBuilding === "Barracks" },
@@ -78,18 +102,55 @@ const LAB_GROUPS: { label: string; match: (category: string, e: Entry) => boolea
   { label: "Animaux", match: (c) => c === "pets" },
 ];
 
-interface LabRow {
-  entry: Entry;
-  category: string;
-  now: number;
-  end: number;
-  max: number;
+const launchedGain = (rs: ChainResult[]) => rs.reduce((n, r) => n + levelLaunched(r) - r.chain.startLevel, 0);
+const segmentsOf = (rs: ChainResult[]) => rs.flatMap((r) => r.segments);
+
+function heroRows(v: Village, f: Forecast): Row[] {
+  return f.heroes.results.map((r) => ({
+    category: "heroes",
+    entry: r.chain.entry,
+    lvls: [r.chain.startLevel],
+    gained: levelLaunched(r) - r.chain.startLevel,
+    max: maxLevel(r.chain.entry, v.gates),
+    planned: r.segments,
+  }));
 }
 
-function labRows(v: Village, f: Forecast): LabRow[] {
+function buildingGroups(v: Village, f: Forecast): Group[] {
+  const byId = new Map<number, Row>();
+  for (const i of v.items.filter(isPermanentBuilding)) {
+    const row = byId.get(i.entry.id) ?? {
+      category: i.category,
+      entry: i.entry,
+      lvls: [],
+      gained: 0,
+      max: maxLevel(i.entry, { th: v.th }),
+      allowed: gameIndex().data.thCounts[i.entry.id]?.[v.th],
+      planned: [],
+    };
+    for (let n = 0; n < (i.cnt ?? 1); n++) row.lvls.push(i.lvl ?? 0);
+    byId.set(i.entry.id, row);
+  }
+  for (const row of byId.values()) {
+    const rs = f.buildings.results.filter((r) => r.chain.entry.id === row.entry.id);
+    row.gained = launchedGain(rs);
+    row.planned = segmentsOf(rs);
+  }
+  const order: BuildingGroup[] = ["defense", "army", "resource", "trap"];
+  return order
+    .map((g) => ({
+      label: GROUP_LABEL[g],
+      rows: [...byId.values()]
+        .filter((r) => r.max > 0 && groupOf(r.category, r.entry) === g)
+        .sort((a, b) => priorityRank(a.category, a.entry) - priorityRank(b.category, b.entry)),
+    }))
+    .filter((g) => g.rows.length);
+}
+
+function labGroups(v: Village, f: Forecast): Group[] {
   const results = new Map<string, ChainResult>();
   for (const r of [...f.labBest.results, ...f.pets.results]) results.set(r.chain.key, r);
-  const out: LabRow[] = [];
+  const rows: Row[] = [];
   for (const i of v.items) {
     const isLab =
       (i.category === "troops" && i.entry.village === "home" && !i.entry.superTroop && !i.entry.seasonal) ||
@@ -98,57 +159,81 @@ function labRows(v: Village, f: Forecast): LabRow[] {
     if (!isLab) continue;
     const max = maxLevel(i.entry, v.gates);
     if (max === 0) continue;
-    const now = Math.min(i.lvl ?? 0, max);
     const r = results.get(`${i.category}:${i.entry.id}`);
-    // Lancé avant la fin du Jam, même fini après : compté comme dans les autres écrans.
-    out.push({ entry: i.entry, category: i.category, now, end: r ? Math.min(max, Math.max(now, levelLaunched(r))) : now, max });
+    rows.push({ category: i.category, entry: i.entry, lvls: [Math.min(i.lvl ?? 0, max)], gained: r ? launchedGain([r]) : 0, max, planned: r?.segments ?? [] });
   }
-  return out;
+  return LAB_GROUPS.map((g) => ({ label: g.label, rows: rows.filter((r) => g.match(r.category, r.entry)) })).filter((g) => g.rows.length);
 }
 
-function labDetail(v: Village, f: Forecast): HTMLElement {
-  const rows = labRows(v, f);
-  const groups = LAB_GROUPS.map((g) => ({ label: g.label, rows: rows.filter((r) => g.match(r.category, r.entry)) })).filter((g) => g.rows.length);
+const sum = (xs: number[]) => xs.reduce((a, b) => a + b, 0);
+
+function detailRow(r: Row, p: ProgressionProps): HTMLElement {
+  const lo = Math.min(...r.lvls);
+  const hi = Math.max(...r.lvls);
+  const total = r.max * r.lvls.length;
+  const now = Math.min(sum(r.lvls), total);
+  const end = Math.min(total, now + r.gained);
+  const atMax = now >= total;
+  const name = r.category === "heroes" ? (HERO_SHORT[r.entry.name] ?? displayName(r.entry)) : displayName(r.entry);
+  const levels = lo === hi ? `${lo}` : `${lo}-${hi}`;
+  const built = r.allowed && r.allowed > r.lvls.length ? ` · ${r.lvls.length}/${r.allowed} construits` : r.lvls.length > 1 ? ` · ×${r.lvls.length}` : "";
+  const open = () =>
+    openUpgradeInfo({
+      category: r.category,
+      entry: r.entry,
+      level: lo,
+      count: r.lvls.filter((l) => l === lo).length,
+      max: r.max,
+      gates: p.village.gates,
+      pass: p.pass,
+      planned: r.planned,
+      exportUnix: p.village.timestamp,
+    });
+  return h(
+    "li",
+    null,
+    h(
+      "button",
+      { type: "button", class: atMax ? "pg-lab-row is-max" : "pg-lab-row", onClick: open, title: "Voir les niveaux à venir" },
+      sprite(r.category, r.entry, r.category === "buildings" || r.category === "traps" ? lo || undefined : undefined, "sm"),
+      h(
+        "span",
+        { class: "pg-lab-main" },
+        h(
+          "span",
+          { class: "pg-lab-head" },
+          h("span", { class: "pg-lab-name" }, name, h("span", { class: "hint" }, built)),
+          h("span", { class: "muted" }, r.gained && r.lvls.length === 1 ? `${lo} → ${lo + r.gained} / ${r.max}` : `${levels} / ${r.max}`),
+        ),
+        dualBar(now / total, end / total, `${name} : niveau ${levels} sur ${r.max}${r.gained ? `, +${r.gained} pendant le Jam` : ""}`),
+      ),
+      atMax ? h("span", { class: "pill pill-max" }, "MAX") : r.gained ? h("span", { class: "pill" }, `+${r.gained}`) : h("span", { class: "pill pill-muted" }, "0"),
+    ),
+  );
+}
+
+function detailCard(title: string, groups: Group[], p: ProgressionProps): HTMLElement {
+  const rows = groups.flatMap((g) => g.rows);
+  const isMax = (r: Row) => sum(r.lvls) >= r.max * r.lvls.length;
   return h(
     "section",
     { class: "card" },
-    h("div", { class: "card-head" }, h("h2", { class: "card-title" }, "Labo et animaux en détail"), h("span", { class: "muted" }, `${rows.filter((r) => r.now >= r.max).length} / ${rows.length} au max`)),
+    h("div", { class: "card-head" }, h("h2", { class: "card-title" }, title), h("span", { class: "muted" }, `${rows.filter(isMax).length} / ${rows.length} au max`)),
     groups.map((g) => {
-      const done = g.rows.filter((r) => r.now >= r.max).length;
-      const planned = g.rows.reduce((n, r) => n + r.end - r.now, 0);
+      const planned = sum(g.rows.map((r) => r.gained));
       return h(
         "div",
         { class: "pg-lab-group" },
-        h("h3", { class: "pg-lab-title" }, g.label, h("span", { class: "hint" }, ` · ${done}/${g.rows.length} au max${planned ? ` · +${planned} pendant le Jam` : ""}`)),
-        h(
-          "ul",
-          { class: "pg-lab-list" },
-          g.rows.map((r) =>
-            h(
-              "li",
-              { class: r.now >= r.max ? "pg-lab-row is-max" : "pg-lab-row" },
-              sprite(r.category, r.entry, undefined, "sm"),
-              h(
-                "span",
-                { class: "pg-lab-main" },
-                h(
-                  "span",
-                  { class: "pg-lab-head" },
-                  h("span", { class: "pg-lab-name" }, displayName(r.entry)),
-                  h("span", { class: "muted" }, r.end > r.now ? `${r.now} → ${r.end} / ${r.max}` : `${r.now} / ${r.max}`),
-                ),
-                dualBar(r.now / r.max, r.end / r.max, `${displayName(r.entry)} : niveau ${r.now}, ${r.end} prévu, sur ${r.max}`),
-              ),
-              r.now >= r.max ? h("span", { class: "pill pill-max" }, "MAX") : r.end > r.now ? h("span", { class: "pill" }, `+${r.end - r.now}`) : h("span", { class: "pill pill-muted" }, "0"),
-            ),
-          ),
-        ),
+        groups.length > 1 || g.label !== title
+          ? h("h3", { class: "pg-lab-title" }, g.label, h("span", { class: "hint" }, ` · ${g.rows.filter(isMax).length}/${g.rows.length} au max${planned ? ` · +${planned} pendant le Jam` : ""}`))
+          : null,
+        h("ul", { class: "pg-lab-list" }, g.rows.map((r) => detailRow(r, p))),
       );
     }),
   );
 }
 
-/** Page Progression : les deux complétions, la courbe, chaque catégorie, puis le labo en détail. */
+/** Page Progression : les deux complétions, la courbe, chaque catégorie, puis le détail élément par élément. */
 export function progressionView(p: ProgressionProps): HTMLElement {
   const v = p.village;
   const f = p.forecast;
@@ -171,7 +256,11 @@ export function progressionView(p: ProgressionProps): HTMLElement {
     h("section", { class: "card" }, h("h2", { class: "card-title" }, "D'ici la fin du Jam"), progressChart(points, p.history, v.timestamp, T)),
     h("h2", { class: "section-title" }, "Par catégorie"),
     h("div", { class: "pg-cats" }, cats.map((c) => categoryCard(c, catsEnd.find((x) => x.key === c.key)!, p.onOpen))),
-    labDetail(v, f),
+    h("h2", { class: "section-title" }, "En détail"),
+    h("p", { class: "hint" }, "Touche un élément pour voir ses prochains niveaux : durée, coût, ce qu'il faut pour les débloquer."),
+    detailCard("Héros", [{ label: "Héros", rows: heroRows(v, f) }], p),
+    detailCard("Bâtiments", buildingGroups(v, f), p),
+    detailCard("Labo et animaux", labGroups(v, f), p),
     p.extra ?? null,
     h("p", { class: "hint" }, "Le pourcentage de l'HDV et du jeu est la moyenne des six catégories. Les points de la courbe sont tes exports passés."),
   );

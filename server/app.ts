@@ -52,6 +52,7 @@ const Subscription = z.object({
   keys: z.object({ p256dh: z.string().min(10).max(200), auth: z.string().min(8).max(100) }),
 });
 const Unsubscribe = z.object({ endpoint: z.string().max(2000) });
+const Emails = z.object({ backlog: z.boolean() });
 
 const CSP = [
   "default-src 'none'",
@@ -79,13 +80,14 @@ interface UserRow {
   id: string;
   username: string;
   is_admin: boolean;
+  backlog_emails: boolean;
   email: string | null;
   password_hash: string;
   token_version: number;
   verified: boolean;
 }
 
-const USER_COLS = "id, username, email, password_hash, token_version, email_verified_at is not null as verified, is_admin";
+const USER_COLS = "id, username, email, password_hash, token_version, email_verified_at is not null as verified, is_admin, backlog_emails";
 
 export async function buildApp(cfg: Config, db: Db, mailer: Mailer, push: PushSender | null = null) {
   const app = Fastify({
@@ -226,7 +228,7 @@ export async function buildApp(cfg: Config, db: Db, mailer: Mailer, push: PushSe
     }
     await db.query("update users set email_verified_at = now() where id = $1", [u.id]);
     await login(reply, u);
-    return { username: u.username, admin: u.is_admin } satisfies MeResponse;
+    return { username: u.username, admin: u.is_admin, backlogEmails: u.backlog_emails } satisfies MeResponse;
   });
 
   app.post("/api/auth/resend", veryStrict, async (req, reply) => {
@@ -250,7 +252,7 @@ export async function buildApp(cfg: Config, db: Db, mailer: Mailer, push: PushSe
       return reply.code(403).send({ error: "Confirme d'abord ton email avec le code reçu.", needsVerification: true, username: u.username });
     }
     await login(reply, u);
-    return { username: u.username, admin: u.is_admin } satisfies MeResponse;
+    return { username: u.username, admin: u.is_admin, backlogEmails: u.backlog_emails } satisfies MeResponse;
   });
 
   app.post("/api/auth/forgot", veryStrict, async (req, reply) => {
@@ -277,7 +279,7 @@ export async function buildApp(cfg: Config, db: Db, mailer: Mailer, push: PushSe
       [u.id, await hashPassword(body.data.password)],
     );
     await login(reply, rows[0]);
-    return { username: u.username, admin: u.is_admin } satisfies MeResponse;
+    return { username: u.username, admin: u.is_admin, backlogEmails: u.backlog_emails } satisfies MeResponse;
   });
 
   app.post("/api/auth/logout", async (_req, reply) => {
@@ -292,7 +294,17 @@ export async function buildApp(cfg: Config, db: Db, mailer: Mailer, push: PushSe
     return { ok: true };
   });
 
-  app.get("/api/auth/me", { preHandler: requireUser }, async (req) => ({ username: req.user!.username, admin: req.user!.admin }) satisfies MeResponse);
+  app.get("/api/auth/me", { preHandler: requireUser }, async (req) => {
+    const { rows } = await db.query<{ backlog_emails: boolean }>("select backlog_emails from users where id = $1", [req.user!.id]);
+    return { username: req.user!.username, admin: req.user!.admin, backlogEmails: rows[0]?.backlog_emails ?? true } satisfies MeResponse;
+  });
+
+  app.put("/api/me/emails", { preHandler: requireUser }, async (req, reply) => {
+    const body = Emails.safeParse(req.body);
+    if (!body.success) return bad(reply, body.error);
+    await db.query("update users set backlog_emails = $2 where id = $1", [req.user!.id, body.data.backlog]);
+    return body.data;
+  });
 
   /* ---------- Réglages ---------- */
 
@@ -386,7 +398,40 @@ export async function buildApp(cfg: Config, db: Db, mailer: Mailer, push: PushSe
 
   /* ---------- Backlog ---------- */
 
-  registerBacklog(app, db, requireUser, bad);
+  /** Commentaires rapprochés sur un même ticket : un seul email par 10 minutes et par auteur. */
+  const lastCommentMail = new Map<string, number>();
+
+  /** Prévient l'auteur d'un ticket (email, et notification s'il a activé les rappels), sauf s'il en est l'acteur. */
+  const notifyTicket = async (itemId: number, actorId: number, event: { kind: "deployed" } | { kind: "comment"; author: string; body: string }) => {
+    const { rows } = await db.query<{ user_id: string; username: string; email: string | null; backlog_emails: boolean; title: string }>(
+      `select u.id as user_id, u.username, u.email, u.backlog_emails, b.title
+       from backlog_items b join users u on u.id = b.user_id where b.id = $1`,
+      [itemId],
+    );
+    const t = rows[0];
+    if (!t || Number(t.user_id) === actorId || !t.backlog_emails) return;
+    if (event.kind === "comment") {
+      const key = `${t.user_id}:${itemId}`;
+      if (Date.now() - (lastCommentMail.get(key) ?? 0) < 10 * 60_000) return;
+      lastCommentMail.set(key, Date.now());
+    }
+    const link = `${cfg.appOrigin ?? ""}/#ticket=${itemId}`;
+    const excerpt = event.kind === "comment" ? (event.body.length > 400 ? `${event.body.slice(0, 400)}…` : event.body || "(une capture)") : "";
+    if (t.email) {
+      sendLater(event.kind === "deployed" ? mails.ticketDeployed(t.email, t.username, t.title, link) : mails.ticketComment(t.email, t.username, event.author, t.title, excerpt, link));
+    }
+    if (push) {
+      const message =
+        event.kind === "deployed"
+          ? { title: "Ton ticket est déployé", body: t.title, tag: `ticket-${itemId}`, url: `/#ticket=${itemId}` }
+          : { title: `${event.author} a commenté ton ticket`, body: `${t.title} : ${excerpt}`, tag: `ticket-${itemId}`, url: `/#ticket=${itemId}` };
+      sendToUser(db, push, Number(t.user_id), message).catch((e) => app.log.error({ err: e }, "Échec de la notification de ticket"));
+    }
+  };
+
+  registerBacklog(app, db, requireUser, bad, (itemId, actorId, event) => {
+    notifyTicket(itemId, actorId, event).catch((e) => app.log.error({ err: e }, "Échec de la notification de ticket"));
+  });
 
   /* ---------- Quoi de neuf ---------- */
 
@@ -437,8 +482,9 @@ export async function buildApp(cfg: Config, db: Db, mailer: Mailer, push: PushSe
 
   app.post("/api/push/test", { preHandler: requireUser, config: { rateLimit: { max: 3, timeWindow: "1 minute" } } }, async (req, reply) => {
     if (!push) return reply.code(503).send({ error: "Les notifications ne sont pas activées sur ce serveur." });
-    const sent = await sendToUser(db, push, req.user!.id, { title: "COC Tracker", body: "Les rappels sont activés sur cet appareil.", tag: "test" });
-    return { sent };
+    const res = await sendToUser(db, push, req.user!.id, { title: "COC Tracker", body: "Les rappels sont activés sur cet appareil.", tag: "test" });
+    for (const f of res.failed) req.log.warn(`Push de test refusé par ${f.service} : ${f.status ?? "?"} ${f.reason}`);
+    return res;
   });
 
   /* ---------- Site ---------- */

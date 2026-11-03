@@ -106,7 +106,16 @@ const toItem = (r: ItemRow): BacklogItem => ({
   commenters: r.commenters,
 });
 
-export function registerBacklog(app: FastifyInstance, db: Db, requireUser: Guard, bad: Bad): void {
+/** Événement à signaler à l'auteur d'un ticket (email, notification). */
+export type TicketEvent = { kind: "deployed" } | { kind: "comment"; author: string; body: string };
+
+export function registerBacklog(
+  app: FastifyInstance,
+  db: Db,
+  requireUser: Guard,
+  bad: Bad,
+  notify: (itemId: number, actorId: number, event: TicketEvent) => void = () => {},
+): void {
   const item = async (userId: number, id: number) => {
     const { rows } = await db.query<ItemRow>(`${ITEM_SELECT} where b.id = $2`, [userId, id]);
     return rows[0] ? toItem(rows[0]) : null;
@@ -234,6 +243,7 @@ export function registerBacklog(app: FastifyInstance, db: Db, requireUser: Guard
     if (current.status === body.data.status) return current;
     if (!canMove(current, body.data.status, user.admin)) return reply.code(403).send({ error: "Seul l'admin déplace ce ticket." });
     await db.query("update backlog_items set status = $2, moved_at = now() where id = $1", [params.data.id, body.data.status]);
+    if (body.data.status === "deployed") notify(params.data.id, user.id, { kind: "deployed" });
     return item(user.id, params.data.id);
   });
 
@@ -275,6 +285,7 @@ export function registerBacklog(app: FastifyInstance, db: Db, requireUser: Guard
         );
         await insertImages(q, userId, params.data.id, Number(rows[0].id), imgs);
       });
+      notify(params.data.id, userId, { kind: "comment", author: req.user!.username, body: body.data.body });
       return reply.code(201).send(await ticket(userId, params.data.id));
     },
   );

@@ -44,6 +44,21 @@ export interface Config {
   devLogin: string | null;
 }
 
+/**
+ * Contact donné aux services push. Apple refuse une adresse de test (« localhost ») : on prend alors
+ * l'adresse du site, sinon l'expéditeur des emails.
+ */
+export function vapidSubject(env: NodeJS.ProcessEnv): string {
+  const valid = (s: string | undefined): s is string =>
+    !!s && !/localhost|example\.|\.local\b|\.test\b/i.test(s) && (/^mailto:[^@\s]+@[^@\s]+\.[a-z]{2,}$/i.test(s) || /^https:\/\/[^/\s]+\.[a-z]{2,}/i.test(s));
+  if (valid(env.VAPID_SUBJECT)) return env.VAPID_SUBJECT;
+  const origin = env.APP_ORIGIN?.replace(/\/$/, "");
+  if (valid(origin)) return origin;
+  const from = env.MAIL_FROM?.match(/[^<\s]+@[^>\s]+/)?.[0];
+  if (valid(from && `mailto:${from}`)) return `mailto:${from}`;
+  return env.VAPID_SUBJECT || "mailto:admin@localhost";
+}
+
 /** Même règle que les pseudos des comptes. */
 const USERNAME = /^[A-Za-z0-9_-]{3,20}$/;
 
@@ -75,7 +90,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 
   const vapid: VapidConfig | null =
     env.VAPID_PUBLIC_KEY && env.VAPID_PRIVATE_KEY
-      ? { publicKey: env.VAPID_PUBLIC_KEY, privateKey: env.VAPID_PRIVATE_KEY, subject: env.VAPID_SUBJECT || "mailto:admin@localhost" }
+      ? { publicKey: env.VAPID_PUBLIC_KEY, privateKey: env.VAPID_PRIVATE_KEY, subject: vapidSubject(env) }
       : null;
 
   const devLogin = env.DEV_LOGIN?.trim() || null;

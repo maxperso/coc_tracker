@@ -41,6 +41,7 @@ if (smtp) {
 
 const push = cfg.vapid ? webPushSender(cfg.vapid) : null;
 if (!push) console.warn("Pas de clés VAPID : les notifications push sont désactivées.");
+else console.log(`Notifications push actives (contact ${cfg.vapid!.subject}).`);
 
 const app = await buildApp(cfg, db, mailer, push);
 await app.listen({ port: cfg.port, host: cfg.host });

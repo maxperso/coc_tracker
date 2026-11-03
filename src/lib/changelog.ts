@@ -19,6 +19,15 @@ export interface Release {
 
 export const CHANGELOG: Release[] = [
   {
+    id: 8,
+    date: "2026-11-03",
+    changes: [
+      { kind: "feature", text: "Progression : héros, bâtiments, labo et animaux en détail. Touche un élément pour voir ses prochains niveaux : durée et coût pendant le Jam, ce qu'il faut pour les débloquer, et quand ton plan les lance (merci Axel pour l'idée)." },
+      { kind: "feature", text: "Un email (et une notification si les rappels sont actifs) quand ton ticket du backlog passe en Déployé ou reçoit un commentaire. Désactivable dans Mon compte." },
+      { kind: "bug", text: "Rappels sur iPhone : Apple refusait l'adresse de contact du serveur. Le bouton « Envoyer un test » dit maintenant ce qui s'est passé." },
+    ],
+  },
+  {
     id: 7,
     date: "2026-11-03",
     changes: [

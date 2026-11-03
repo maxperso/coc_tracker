@@ -133,6 +133,10 @@ const MIGRATIONS: string[] = [
   alter table users add column seen_release integer not null default 0;
   alter table users add column whats_new_seen_at timestamptz not null default now();
   `,
+  // 7 : emails quand son ticket du backlog est déployé ou commenté (désactivables).
+  `
+  alter table users add column backlog_emails boolean not null default true;
+  `,
 ];
 
 export async function migrate(db: Db): Promise<number> {

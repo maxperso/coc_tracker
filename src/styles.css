@@ -4047,6 +4047,26 @@ select.input {
   grid-template-columns: 36px minmax(0, 1fr) auto;
   align-items: center;
   gap: 10px;
+  width: 100%;
+  margin: -4px;
+  padding: 4px;
+  border: 0;
+  border-radius: 12px;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+
+.pg-lab-row:hover {
+  background: var(--soft);
+}
+
+.pg-lab-row:focus-visible {
+  outline: 2px solid var(--text);
+  outline-offset: 2px;
 }
 
 .pg-lab-row.is-max .sprite {
@@ -4092,5 +4112,157 @@ select.input {
 
   .pg-big {
     font-size: 2rem;
+  }
+}
+
+/* ---------- Fiche d'un élément : niveaux à venir ---------- */
+.upgrade-info {
+  width: min(720px, calc(100vw - 32px));
+}
+
+.ui-head {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+}
+
+.ui-head h2 {
+  font-size: 1.375rem;
+  font-weight: 750;
+}
+
+.ui-scroll {
+  max-height: min(60vh, 520px);
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+}
+
+.ui-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.ui-table th,
+.ui-table td {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: middle;
+}
+
+.ui-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--bg);
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.ui-table tbody tr:last-child th,
+.ui-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.ui-table tbody th {
+  white-space: nowrap;
+  font-weight: 650;
+}
+
+.ui-table td .cost {
+  margin-left: 0;
+}
+
+.ui-jam {
+  display: block;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.ui-base {
+  display: block;
+  color: var(--muted);
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+
+.ui-when {
+  color: var(--muted);
+  font-size: 0.8125rem;
+}
+
+.ui-table tr.is-planned .ui-when {
+  color: var(--done-strong);
+  font-weight: 600;
+}
+
+.ui-table tr.is-locked {
+  opacity: 0.55;
+}
+
+.ui-total {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+@media (max-width: 560px) {
+  /* Une ligne du tableau devient un bloc : niveau et date en haut, durée et coût en dessous. */
+  .ui-table thead {
+    display: none;
+  }
+
+  .ui-table tbody tr {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 4px 12px;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .ui-table tbody tr:last-child {
+    border-bottom: 0;
+  }
+
+  .ui-table tbody th,
+  .ui-table tbody td {
+    display: block;
+    padding: 0;
+    border: 0;
+  }
+
+  .ui-table tbody th {
+    grid-area: 1 / 1;
+  }
+
+  .ui-table .ui-when {
+    grid-area: 1 / 2;
+    text-align: right;
+  }
+
+  .ui-table tbody td:nth-child(2) {
+    grid-area: 2 / 1;
+  }
+
+  .ui-table tbody td:nth-child(3) {
+    grid-area: 2 / 2;
+    justify-self: end;
+    text-align: right;
+  }
+
+  .ui-head {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .ui-head .btn {
+    grid-column: 1 / -1;
   }
 }

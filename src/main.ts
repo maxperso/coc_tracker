@@ -57,6 +57,8 @@ const state: {
   backlog: BacklogState;
   /** Administrateur du backlog. */
   admin: boolean;
+  /** Emails quand un de ses tickets est déployé ou commenté. */
+  backlogEmails: boolean;
   /** Page Commu sans export : amis ou backlog. */
   commuTab: CommuTab;
   friend: (Loaded & { username: string; settings: Settings; demo?: boolean }) | null;
@@ -73,6 +75,7 @@ const state: {
   players: { rows: null },
   backlog: { rows: null },
   admin: false,
+  backlogEmails: true,
   commuTab: "players",
   friend: null,
   friendTab: "summary",
@@ -164,8 +167,9 @@ async function boot(): Promise<void> {
   // Connecté : directement son dashboard (ou l'écran d'export s'il n'y en a pas encore). Sinon, la page d'accueil.
   state.view = state.me ? (state.mine ? "dash" : "home") : "landing";
   render();
-  // Par-dessus, les nouveautés pas encore vues.
-  void showWhatsNew();
+  // Lien d'un email ou d'une notification : « /#ticket=12 » ouvre ce ticket.
+  if (!openFromHash()) void showWhatsNew();
+  window.addEventListener("hashchange", () => void openFromHash());
 }
 
 /** Mode dev : pastille permanente, pour ne jamais confondre avec le vrai site. */
@@ -227,6 +231,7 @@ async function authStep(run: () => Promise<void>) {
 function setMe(me: MeResponse) {
   state.me = me.username;
   state.admin = me.admin;
+  state.backlogEmails = me.backlogEmails;
 }
 
 async function signedIn(me: MeResponse) {
@@ -234,7 +239,7 @@ async function signedIn(me: MeResponse) {
   state.auth = { mode: "login", busy: false, inviteRequired: state.auth.inviteRequired };
   await loadMine();
   render();
-  void showWhatsNew();
+  if (!openFromHash()) void showWhatsNew();
 }
 
 /* ---------- Quoi de neuf ? ---------- */
@@ -260,6 +265,15 @@ async function showWhatsNew() {
   } catch {
     // Pas grave : on réessaiera à la prochaine visite.
   }
+}
+
+/** « #ticket=12 » dans l'adresse : ouvre le ticket (connecté seulement), puis nettoie l'adresse. */
+function openFromHash(): boolean {
+  const m = location.hash.match(/^#ticket=(\d+)$/);
+  if (!m || !state.me) return false;
+  history.replaceState(null, "", location.pathname + location.search);
+  openBacklogTicket(Number(m[1]));
+  return true;
 }
 
 function openBacklogTicket(id: number) {
@@ -356,6 +370,19 @@ function askMedals(village: Village) {
   });
   document.body.append(dlg);
   dlg.showModal();
+}
+
+/** Test des rappels : dit ce qui s'est passé, appareil par appareil. */
+async function pushTest() {
+  try {
+    const r = await api.pushTest();
+    const refused = r.failed.map((f) => `${f.service} a refusé (${f.status ?? "?"} ${f.reason})`).join(", ");
+    if (r.sent && !refused) toast(`Notification envoyée à ${r.sent} appareil${r.sent > 1 ? "s" : ""}. Rien reçu ? Vérifie les réglages de notification de ton téléphone.`);
+    else if (refused) toast(`${r.sent ? `Envoyée à ${r.sent} appareil${r.sent > 1 ? "s" : ""}, mais ` : ""}${refused}. Envoie-moi ce message.`);
+    else toast("Aucun appareil abonné : désactive puis réactive les rappels.");
+  } catch (e) {
+    toast(handleError(e));
+  }
 }
 
 /** Message bref en bas de l'écran (enregistrement raté…). */
@@ -819,7 +846,16 @@ function renderView(): void {
     onCheck: friend ? undefined : toggleCheck,
     push,
     onPush: (enable) => void togglePush(enable),
-    onPushTest: () => void api.pushTest().catch((e) => void handleError(e)),
+    onPushTest: () => void pushTest(),
+    backlogEmails: state.backlogEmails,
+    onBacklogEmails: (on) => {
+      state.backlogEmails = on;
+      api.setEmails(on).catch((e) => {
+        state.backlogEmails = !on;
+        toast(handleError(e));
+        render();
+      });
+    },
     install: { available: canInstall(), ios: isIos(), standalone: isStandalone() },
     onInstall: () => void install().then(() => render()),
     compare:

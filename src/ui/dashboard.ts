@@ -23,6 +23,7 @@ import { icon, type IconName } from "./icons";
 import { backlogView, type BacklogActions, type BacklogState } from "./backlog";
 import { orderEditor } from "./order";
 import { progressionView } from "./progression";
+import { costTag, res } from "./resources";
 import { sprite } from "./sprite";
 
 export type Tab = "summary" | "plan" | "order" | "heroes" | "buildings" | "lab" | "progress" | "players" | "backlog" | "compare" | "more";
@@ -99,6 +100,9 @@ export interface DashboardProps {
   push: PushState | "loading";
   onPush: (enable: boolean) => void;
   onPushTest: () => void;
+  /** Emails quand un de ses tickets du backlog est déployé ou commenté. */
+  backlogEmails: boolean;
+  onBacklogEmails: (on: boolean) => void;
   install: { available: boolean; ios: boolean; standalone: boolean };
   onInstall: () => void;
   /** Profil d'un ami : mon village, pour l'onglet « Comparer ». */
@@ -107,29 +111,8 @@ export interface DashboardProps {
 
 const readOnly = (p: DashboardProps) => p.owner.toLowerCase() !== p.me.toLowerCase();
 
-const RESOURCE_FR: Record<string, string> = { "Dark Elixir": "élixir noir", Elixir: "élixir", Gold: "or" };
-const res = (r?: string) => (r ? (RESOURCE_FR[r] ?? r) : "");
-const RESOURCE_ICON: Record<string, string> = { Gold: "gold", Elixir: "elixir", "Dark Elixir": "dark_elixir" };
-
-/** Coût d'un lancement, prix du Jam : icône de la ressource et montant arrondi (exact au survol). */
-function costTag(r: ChainResult, seg: { cost: number }): HTMLElement | null {
-  if (!(seg.cost > 0)) return null;
-  const resource = r.chain.entry.resource;
-  const file = resource ? RESOURCE_ICON[resource] : undefined;
-  return h(
-    "span",
-    { class: "cost", title: `${nf(Math.round(seg.cost))} ${res(resource)}, prix réduit du Jam` },
-    file ? h("img", { class: "cost-icon", src: `sprites/resources/${file}.webp`, alt: res(resource) }) : null,
-    file ? price(seg.cost) : `${price(seg.cost)} ${res(resource)}`,
-  );
-}
-
-/** « 12,75 M », « 2,1 M », « 210 k » : assez précis pour préparer ses ressources. */
-function price(n: number): string {
-  if (n < 1e6) return compact(n);
-  const m = n / 1e6;
-  return `${m.toLocaleString("fr-FR", { maximumFractionDigits: m >= 100 ? 0 : 2 })} M`;
-}
+/** Coût d'un lancement au prix du Jam. */
+const launchCost = (r: ChainResult, seg: { cost: number }) => costTag(seg.cost, r.chain.entry.resource);
 const plural = (n: number, word: string) => `${word}${Math.abs(n) > 1 ? (word.endsWith("au") ? "x" : "s") : ""}`;
 const pctText = (x: number) => `${Math.floor(x * 100)} %`;
 
@@ -333,7 +316,7 @@ function todos(f: Forecast, v: Village): Todo[] {
           sub: "Ouvrier libre",
           urgent: true,
           key: `L:${r.chain.key}:${s.toLevel}`,
-          cost: costTag(r, s),
+          cost: launchCost(r, s),
         });
       }
     } else {
@@ -350,7 +333,7 @@ function todos(f: Forecast, v: Village): Todo[] {
         sub: `${label} vide`,
         urgent: true,
         key: `L:${first.r.chain.key}:${first.s.toLevel}`,
-        cost: costTag(first.r, first.s),
+        cost: launchCost(first.r, first.s),
       });
     }
   };
@@ -823,7 +806,7 @@ function eventRow(p: DashboardProps, e: PlanEvent, exportUnix: number, T: number
     h(
       "div",
       { class: "ev-main" },
-      h("p", { class: "ev-text" }, `Lance ${nameOf(r)} ${e.seg.toLevel - 1} → ${e.seg.toLevel}`, costTag(r, e.seg)),
+      h("p", { class: "ev-text" }, `Lance ${nameOf(r)} ${e.seg.toLevel - 1} → ${e.seg.toLevel}`, launchCost(r, e.seg)),
       h("p", { class: "hint" }, `${POOL_LABEL[e.pool]} · fini le ${fmtDateTime(toDate(exportUnix, e.seg.end))}${e.seg.end > T ? " (après le Jam)" : ""}`),
     ),
     doneBox(p, key, `${nameOf(r)} ${e.seg.toLevel - 1} → ${e.seg.toLevel}`, () => li, onToggle),
@@ -1190,7 +1173,7 @@ function progressTab(p: DashboardProps, f: Forecast): HTMLElement {
     "section",
     { class: "stack" },
     sectionHead(readOnly(p) ? `Progression de ${p.owner}` : "Progression", "Aujourd'hui, et ce que le Jam va changer.", estimate()),
-    progressionView({ village: v, forecast: f, history: dots, onOpen: (t) => p.onTab(t), extra: details("Gains depuis le dernier export", false, () => historyView(p)) }),
+    progressionView({ village: v, forecast: f, history: dots, pass: p.settings.pass, onOpen: (t) => p.onTab(t), extra: details("Gains depuis le dernier export", false, () => historyView(p)) }),
   );
 }
 
@@ -1214,6 +1197,7 @@ function moreTab(p: DashboardProps, f: Forecast): HTMLElement {
       ),
     ),
     h("div", { class: "dash-grid" }, remindersCard(p), appCard(p)),
+    emailsCard(p),
     h("section", { class: "card" }, h("h2", { class: "card-title" }, "Apparence"), themeControl(p.theme, p.onTheme)),
     details("Planning des potions", true, () => potionPlanView(f, v.timestamp)),
     details("Contrôle de l'export", v.report.unknown.length > 0, () => exportCheck(v)),
@@ -1223,6 +1207,22 @@ function moreTab(p: DashboardProps, f: Forecast): HTMLElement {
       { class: "button-row" },
       h("button", { type: "button", class: "btn btn-ghost", onClick: p.onLogout }, "Se déconnecter"),
       h("button", { type: "button", class: "btn btn-ghost", onClick: p.onLogoutAll }, "Se déconnecter partout"),
+    ),
+  );
+}
+
+function emailsCard(p: DashboardProps): HTMLElement {
+  const box = h("input", { type: "checkbox", id: "backlog-emails", class: "checkbox", checked: p.backlogEmails });
+  box.addEventListener("change", () => p.onBacklogEmails(box.checked));
+  return h(
+    "section",
+    { class: "card" },
+    h("h2", { class: "card-title" }, "Emails"),
+    h(
+      "div",
+      { class: "field field-check" },
+      box,
+      h("label", { for: "backlog-emails" }, "Me prévenir pour mes tickets", h("span", { class: "hint" }, "Un email quand un de tes tickets du backlog est déployé ou reçoit un commentaire.")),
     ),
   );
 }
@@ -1243,6 +1243,13 @@ function remindersCard(p: DashboardProps): HTMLElement {
     { class: "card" },
     h("div", { class: "card-head" }, h("h2", { class: "card-title" }, "Rappels"), state === "on" ? h("span", { class: "pill" }, "Actifs") : null),
     h("p", { class: "muted" }, text[state]),
+    p.install.ios && (state === "on" || state === "off" || state === "denied")
+      ? h(
+          "p",
+          { class: "hint" },
+          "Sur iPhone (iOS 16.4 ou plus) : ouvre COC Tracker depuis son icône sur l'écran d'accueil, pas depuis Safari. Si rien n'arrive : Réglages de l'iPhone › Notifications › COC Tracker › Autoriser.",
+        )
+      : null,
     h(
       "div",
       { class: "button-row" },

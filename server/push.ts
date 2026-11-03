@@ -15,8 +15,36 @@ export interface PushSubscriptionRow {
 }
 
 export interface PushSender {
-  /** "gone" : l'abonnement n'existe plus chez le service push, on le supprime. */
+  /** "gone" : l'abonnement n'existe plus chez le service push, on le supprime. Lève une PushError sinon. */
   send(sub: PushSubscriptionRow, payload: string): Promise<"ok" | "gone">;
+}
+
+/** Refus d'un service push, avec sa réponse (ex. Apple : 403 BadJwtToken). */
+export class PushError extends Error {
+  constructor(
+    readonly status: number | undefined,
+    readonly reason: string,
+  ) {
+    super(`${status ?? "?"} ${reason}`);
+  }
+}
+
+export interface PushFailure {
+  service: string;
+  status?: number;
+  reason: string;
+}
+
+/** « Apple », « Google »… d'après l'adresse de l'abonnement. */
+export function serviceName(endpoint: string): string {
+  const host = (() => {
+    try {
+      return new URL(endpoint).hostname;
+    } catch {
+      return "";
+    }
+  })();
+  return host.endsWith("push.apple.com") ? "Apple" : host === "fcm.googleapis.com" ? "Google" : host.includes("mozilla") ? "Firefox" : host.includes("windows") ? "Windows" : "service push";
 }
 
 export function webPushSender(cfg: VapidConfig): PushSender {
@@ -27,9 +55,9 @@ export function webPushSender(cfg: VapidConfig): PushSender {
         await webpush.sendNotification({ endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } }, payload, { TTL: 3600, urgency: "high" });
         return "ok";
       } catch (e) {
-        const status = (e as { statusCode?: number }).statusCode;
+        const { statusCode: status, body } = e as { statusCode?: number; body?: string };
         if (status === 404 || status === 410) return "gone";
-        throw e;
+        throw new PushError(status, (body || (e as Error).message || "refusé").trim().slice(0, 200));
       }
     },
   };
@@ -80,16 +108,29 @@ export async function rebuildQueue(db: Db, userId: number, now = Date.now() / 10
   return reminders.length;
 }
 
-/** Envoie un message à tous les appareils d'un joueur ; supprime les abonnements expirés. */
-export async function sendToUser(db: Db, sender: PushSender, userId: number, message: { title: string; body: string; tag?: string }): Promise<number> {
+/**
+ * Envoie un message à tous les appareils d'un joueur ; supprime les abonnements expirés.
+ * Un appareil qui refuse n'empêche pas les autres de recevoir : son refus est rendu dans `failed`.
+ */
+export async function sendToUser(
+  db: Db,
+  sender: PushSender,
+  userId: number,
+  message: { title: string; body: string; tag?: string; url?: string },
+): Promise<{ sent: number; failed: PushFailure[] }> {
   const { rows } = await db.query<PushSubscriptionRow & { id: string }>("select id, endpoint, p256dh, auth from push_subscriptions where user_id = $1", [userId]);
   let sent = 0;
+  const failed: PushFailure[] = [];
   for (const sub of rows) {
-    const r = await sender.send(sub, JSON.stringify({ ...message, url: "/" }));
-    if (r === "gone") await db.query("delete from push_subscriptions where id = $1", [sub.id]);
-    else sent++;
+    try {
+      const r = await sender.send(sub, JSON.stringify({ url: "/", ...message }));
+      if (r === "gone") await db.query("delete from push_subscriptions where id = $1", [sub.id]);
+      else sent++;
+    } catch (e) {
+      failed.push({ service: serviceName(sub.endpoint), status: e instanceof PushError ? e.status : undefined, reason: e instanceof PushError ? e.reason : String(e) });
+    }
   }
-  return sent;
+  return { sent, failed };
 }
 
 /**
@@ -109,7 +150,9 @@ export async function sendDue(db: Db, sender: PushSender, log: (msg: string, err
   let sent = 0;
   for (const r of rows) {
     try {
-      sent += await sendToUser(db, sender, Number(r.user_id), { title: r.title, body: r.body, tag: r.key });
+      const res = await sendToUser(db, sender, Number(r.user_id), { title: r.title, body: r.body, tag: r.key });
+      sent += res.sent;
+      for (const f of res.failed) log(`Push refusé par ${f.service} (${r.key}) : ${f.status ?? "?"} ${f.reason}`);
     } catch (e) {
       log(`Échec d'envoi push (${r.key})`, e);
     }

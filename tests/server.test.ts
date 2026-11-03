@@ -145,7 +145,7 @@ describe.skipIf(!url)("API", () => {
       expect(c.sameSite).toBe("Lax");
       expect(c.path).toBe("/");
       const me = await req({ url: "/api/auth/me", cookie: cookieOf(res) });
-      expect(me.json()).toEqual({ username: "Alice", admin: false });
+      expect(me.json()).toEqual({ username: "Alice", admin: false, backlogEmails: true });
     });
 
     it("un code ne sert qu'une fois", async () => {
@@ -364,8 +364,8 @@ describe.skipIf(!url)("API", () => {
     const WEBP = Buffer.concat([Buffer.from("RIFF"), Buffer.alloc(4), Buffer.from("WEBPVP8 ")]).toString("base64");
 
     it("dit qui est admin", async () => {
-      expect((await req({ url: "/api/auth/me", cookie: admin })).json()).toEqual({ username: "max_perso", admin: true });
-      expect((await req({ url: "/api/auth/me", cookie: dave })).json()).toEqual({ username: "dave", admin: false });
+      expect((await req({ url: "/api/auth/me", cookie: admin })).json()).toMatchObject({ username: "max_perso", admin: true });
+      expect((await req({ url: "/api/auth/me", cookie: dave })).json()).toMatchObject({ username: "dave", admin: false });
     });
 
     it("demande d'être connecté, même pour les captures", async () => {
@@ -446,6 +446,36 @@ describe.skipIf(!url)("API", () => {
       expect((await post("/api/backlog/999999/comments", { body: "?" }, dave)).statusCode).toBe(404);
     });
 
+    it("prévient l'auteur par email : déployé, commentaire d'un autre, une fois par 10 minutes, désactivable", async () => {
+      const mailsTo = (to: string) => sent.filter((m) => m.to === to);
+      const flush = () => new Promise((r) => setTimeout(r, 30));
+      const t = (await post("/api/backlog", { kind: "bug", title: "Coches perdues encore" }, dave)).json();
+      const before = mailsTo("dave@example.test").length;
+      // Son propre commentaire : pas d'email.
+      await post(`/api/backlog/${t.id}/comments`, { body: "Précision" }, dave);
+      await flush();
+      expect(mailsTo("dave@example.test")).toHaveLength(before);
+      await post(`/api/backlog/${t.id}/comments`, { body: "Je regarde ça" }, admin);
+      await post(`/api/backlog/${t.id}/comments`, { body: "Toujours là ?" }, alice);
+      await flush();
+      const comments = mailsTo("dave@example.test").slice(before);
+      expect(comments).toHaveLength(1);
+      expect(comments[0].subject).toContain("max_perso a commenté");
+      expect(comments[0].text).toContain(`/#ticket=${t.id}`);
+      await put(`/api/backlog/${t.id}/status`, { status: "deployed" }, admin);
+      await flush();
+      expect(mailsTo("dave@example.test").at(-1)!.subject).toBe("Déployé : Coches perdues encore");
+      // Désactivé : plus rien.
+      expect((await put("/api/me/emails", { backlog: false }, dave)).statusCode).toBe(200);
+      expect((await req({ url: "/api/auth/me", cookie: dave })).json().backlogEmails).toBe(false);
+      const count = mailsTo("dave@example.test").length;
+      await put(`/api/backlog/${t.id}/status`, { status: "in_progress" }, admin);
+      await put(`/api/backlog/${t.id}/status`, { status: "deployed" }, admin);
+      await flush();
+      expect(mailsTo("dave@example.test")).toHaveLength(count);
+      await put("/api/me/emails", { backlog: true }, dave);
+    });
+
     it("supprime : l'auteur tant que c'est au backlog, l'admin toujours, avec les captures", async () => {
       const t = (await post("/api/backlog", { kind: "bug", title: "À supprimer", images: [{ type: "image/png", data: PNG }] }, dave)).json();
       expect((await del(`/api/backlog/${t.id}`, alice)).statusCode).toBe(404);
@@ -521,7 +551,7 @@ describe.skipIf(!url)("API", () => {
 
     it("connecte d'office le compte de test, admin, avec son village", async () => {
       expect((await dev.inject({ url: "/api/auth/config" })).json().devLogin).toBe("dev");
-      expect((await dev.inject({ url: "/api/auth/me" })).json()).toEqual({ username: "dev", admin: true });
+      expect((await dev.inject({ url: "/api/auth/me" })).json()).toMatchObject({ username: "dev", admin: true });
       const profile = (await dev.inject({ url: "/api/players/dev" })).json();
       expect(profile.exports).toHaveLength(1);
       const { rows } = await db.query("select count(*)::int as n from users where lower(username) in ('dev', 'ami_dev')");

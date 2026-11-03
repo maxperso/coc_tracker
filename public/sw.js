@@ -1,6 +1,6 @@
 // Service worker de COC Tracker : cache du site pour un démarrage rapide, et notifications push.
 // L'API (/api/) n'est jamais mise en cache : les données viennent toujours du serveur.
-const CACHE = "coc-tracker-v1";
+const CACHE = "coc-tracker-v2";
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE).then((c) => c.addAll(["/", "/manifest.webmanifest", "/icons/icon-192.png"])));
@@ -76,8 +76,10 @@ self.addEventListener("notificationclick", (event) => {
   const target = new URL(event.notification.data?.url || "/", self.location.origin).href;
   event.waitUntil(
     self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((list) => {
+      // App déjà ouverte : on l'amène sur la bonne page (ex. « /#ticket=12 »), sinon on l'ouvre.
       const open = list.find((c) => c.url.startsWith(self.location.origin));
-      return open ? open.focus() : self.clients.openWindow(target);
+      if (!open) return self.clients.openWindow(target);
+      return open.focus().then((c) => (c.url === target || !("navigate" in c) ? c : c.navigate(target)));
     }),
   );
 });
