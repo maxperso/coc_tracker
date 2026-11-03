@@ -28,6 +28,8 @@ export function sameSecret(a: string, b: string): boolean {
 export interface SessionUser {
   id: number;
   username: string;
+  /** Peut déplacer et modérer les tickets du backlog. */
+  admin: boolean;
 }
 
 export async function issueSession(reply: FastifyReply, cfg: Config, user: { id: number; username: string; token_version: number }) {
@@ -60,13 +62,13 @@ export async function readSession(req: FastifyRequest, cfg: Config, db: Db): Pro
   try {
     const { payload } = await jwtVerify(token, cfg.jwtSecret, { algorithms: ["HS256"] });
     const id = Number(payload.sub);
-    const { rows } = await db.query<{ id: string; username: string; token_version: number; verified: boolean }>(
-      "select id, username, token_version, email_verified_at is not null as verified from users where id = $1",
+    const { rows } = await db.query<{ id: string; username: string; token_version: number; verified: boolean; is_admin: boolean }>(
+      "select id, username, token_version, email_verified_at is not null as verified, is_admin from users where id = $1",
       [id],
     );
     const u = rows[0];
     if (!u || !u.verified || u.token_version !== payload.ver) return null;
-    return { id: Number(u.id), username: u.username };
+    return { id: Number(u.id), username: u.username, admin: u.is_admin };
   } catch {
     return null;
   }

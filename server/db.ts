@@ -94,6 +94,39 @@ const MIGRATIONS: string[] = [
     primary key (item_id, user_id)
   );
   `,
+  // 5 : rôle admin, backlog en tableau kanban (backlog, en cours, déployé, validé), commentaires et captures.
+  `
+  alter table users add column is_admin boolean not null default false;
+  update users set is_admin = true where lower(username) = 'max_perso';
+
+  alter table backlog_items drop constraint if exists backlog_items_status_check;
+  update backlog_items set status = case status when 'done' then 'deployed' else 'backlog' end;
+  alter table backlog_items alter column status set default 'backlog';
+  alter table backlog_items add constraint backlog_items_status_check
+    check (status in ('backlog', 'in_progress', 'deployed', 'validated'));
+  alter table backlog_items add column moved_at timestamptz not null default now();
+
+  create table backlog_comments (
+    id bigserial primary key,
+    item_id bigint not null references backlog_items(id) on delete cascade,
+    user_id bigint not null references users(id) on delete cascade,
+    body text not null,
+    created_at timestamptz not null default now()
+  );
+  create index backlog_comments_item on backlog_comments (item_id, created_at);
+  create index backlog_comments_user on backlog_comments (user_id, created_at desc);
+
+  create table backlog_images (
+    id bigserial primary key,
+    item_id bigint not null references backlog_items(id) on delete cascade,
+    comment_id bigint references backlog_comments(id) on delete cascade,
+    user_id bigint not null references users(id) on delete cascade,
+    mime text not null check (mime in ('image/webp', 'image/jpeg', 'image/png')),
+    data bytea not null,
+    created_at timestamptz not null default now()
+  );
+  create index backlog_images_item on backlog_images (item_id);
+  `,
 ];
 
 export async function migrate(db: Db): Promise<number> {

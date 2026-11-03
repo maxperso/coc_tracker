@@ -5,6 +5,8 @@ import type { PlayerSummary } from "./summary";
 
 export interface MeResponse {
   username: string;
+  /** Administrateur : déplace et modère les tickets du backlog. */
+  admin: boolean;
 }
 
 export interface AuthConfigResponse {

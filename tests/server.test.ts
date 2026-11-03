@@ -142,7 +142,7 @@ describe.skipIf(!url)("API", () => {
       expect(c.sameSite).toBe("Lax");
       expect(c.path).toBe("/");
       const me = await req({ url: "/api/auth/me", cookie: cookieOf(res) });
-      expect(me.json()).toEqual({ username: "Alice" });
+      expect(me.json()).toEqual({ username: "Alice", admin: false });
     });
 
     it("un code ne sert qu'une fois", async () => {
@@ -342,47 +342,114 @@ describe.skipIf(!url)("API", () => {
     });
   });
 
-  describe("backlog", () => {
+  describe("backlog en kanban", () => {
     let alice: string;
     let dave: string;
+    let admin: string;
     beforeAll(async () => {
       alice = cookieOf(await post("/api/auth/login", { username: "alice", password: "motdepasse1" }));
       dave = await signup("dave", "dave@example.test");
+      await signup("max_perso", "max@example.test");
+      // Le compte existe après la migration qui le nomme admin : on le fait comme la commande « admin ».
+      await db.query("update users set is_admin = true where lower(username) = 'max_perso'");
+      admin = cookieOf(await post("/api/auth/login", { username: "max_perso", password: "motdepasse1" }));
     });
     const put = (url: string, payload: unknown, cookie: string) => req({ method: "PUT", url, payload: payload as object, cookie });
     const del = (url: string, cookie: string) => req({ method: "DELETE", url, cookie });
+    // Plus petites images valides de chaque format.
+    const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+    const WEBP = Buffer.concat([Buffer.from("RIFF"), Buffer.alloc(4), Buffer.from("WEBPVP8 ")]).toString("base64");
 
-    it("demande d'être connecté", async () => {
-      expect((await req({ url: "/api/backlog" })).statusCode).toBe(401);
-      expect((await post("/api/backlog", { kind: "bug", title: "Titre" })).statusCode).toBe(401);
+    it("dit qui est admin", async () => {
+      expect((await req({ url: "/api/auth/me", cookie: admin })).json()).toEqual({ username: "max_perso", admin: true });
+      expect((await req({ url: "/api/auth/me", cookie: dave })).json()).toEqual({ username: "dave", admin: false });
     });
 
-    it("valide les propositions", async () => {
+    it("demande d'être connecté, même pour les captures", async () => {
+      expect((await req({ url: "/api/backlog" })).statusCode).toBe(401);
+      expect((await post("/api/backlog", { kind: "bug", title: "Titre" })).statusCode).toBe(401);
+      expect((await req({ url: "/api/backlog/images/1" })).statusCode).toBe(401);
+    });
+
+    it("valide les tickets et les captures", async () => {
       expect((await post("/api/backlog", { kind: "spam", title: "Titre ok" }, alice)).statusCode).toBe(400);
       expect((await post("/api/backlog", { kind: "bug", title: "  a " }, alice)).statusCode).toBe(400);
       expect((await post("/api/backlog", { kind: "bug", title: "x".repeat(121) }, alice)).statusCode).toBe(400);
       expect((await post("/api/backlog", { kind: "bug", title: "Titre", body: "x".repeat(2001) }, alice)).statusCode).toBe(400);
+      // Contenu qui n'est pas l'image annoncée (ex. du HTML déguisé) : refusé, et rien n'est créé.
+      const fake = Buffer.from("<script>alert(1)</script>").toString("base64");
+      const before = (await db.query("select count(*)::int as n from backlog_items")).rows[0].n;
+      expect((await post("/api/backlog", { kind: "bug", title: "Faux PNG", images: [{ type: "image/png", data: fake }] }, alice)).statusCode).toBe(400);
+      expect((await post("/api/backlog", { kind: "bug", title: "SVG", images: [{ type: "image/svg+xml", data: fake }] }, alice)).statusCode).toBe(400);
+      const five = Array.from({ length: 5 }, () => ({ type: "image/png", data: PNG }));
+      expect((await post("/api/backlog", { kind: "bug", title: "Trop d'images", images: five }, alice)).statusCode).toBe(400);
+      expect((await db.query("select count(*)::int as n from backlog_items")).rows[0].n).toBe(before);
     });
 
-    it("publie, compte le vote de l'auteur, et chacun peut voter une fois", async () => {
-      const created = await post("/api/backlog", { kind: "feature", title: "  Coût total par jour  ", body: "Dans le plan" }, alice);
-      expect(created.statusCode).toBe(201);
-      const item = created.json();
-      expect(item).toMatchObject({ kind: "feature", title: "Coût total par jour", status: "open", author: "Alice", votes: 1, voted: true, mine: true });
+    it("crée un ticket avec captures, dans la colonne Backlog, et sert les captures", async () => {
+      const res = await post("/api/backlog", { kind: "feature", title: "  Coût total par jour  ", body: "Dans le plan", images: [{ type: "image/png", data: PNG }, { type: "image/webp", data: WEBP }] }, alice);
+      expect(res.statusCode).toBe(201);
+      const t = res.json();
+      expect(t).toMatchObject({ kind: "feature", title: "Coût total par jour", status: "backlog", author: "Alice", votes: 1, voted: true, mine: true, images: 2, comments: 0, thread: [] });
+      expect(t.imageIds).toHaveLength(2);
+      const img = await req({ url: `/api/backlog/images/${t.imageIds[0]}`, cookie: dave });
+      expect(img.statusCode).toBe(200);
+      expect(img.headers["content-type"]).toBe("image/png");
+      expect(img.headers["x-content-type-options"]).toBe("nosniff");
+      expect(img.headers["cache-control"]).toContain("private");
+      expect(img.rawPayload.equals(Buffer.from(PNG, "base64"))).toBe(true);
+    });
 
-      const seenByDave = (await req({ url: "/api/backlog", cookie: dave })).json().find((x: { id: number }) => x.id === item.id);
-      expect(seenByDave).toMatchObject({ votes: 1, voted: false, mine: false });
-      for (let i = 0; i < 2; i++) expect((await put(`/api/backlog/${item.id}/vote`, { vote: true }, dave)).json()).toMatchObject({ votes: 2, voted: true });
-      expect((await put(`/api/backlog/${item.id}/vote`, { vote: false }, dave)).json()).toMatchObject({ votes: 1, voted: false });
+    it("chacun vote une fois", async () => {
+      const t = (await post("/api/backlog", { kind: "change", title: "Potions en haut" }, alice)).json();
+      for (let i = 0; i < 2; i++) expect((await put(`/api/backlog/${t.id}/vote`, { vote: true }, dave)).json()).toMatchObject({ votes: 2, voted: true });
+      expect((await put(`/api/backlog/${t.id}/vote`, { vote: false }, dave)).json()).toMatchObject({ votes: 1, voted: false });
       expect((await put("/api/backlog/999999/vote", { vote: true }, dave)).statusCode).toBe(404);
       expect((await put("/api/backlog/abc/vote", { vote: true }, dave)).statusCode).toBe(400);
     });
 
-    it("seul l'auteur supprime sa proposition", async () => {
-      const item = (await post("/api/backlog", { kind: "bug", title: "Le calendrier dépasse" }, dave)).json();
-      expect((await del(`/api/backlog/${item.id}`, alice)).statusCode).toBe(404);
-      expect((await del(`/api/backlog/${item.id}`, dave)).statusCode).toBe(200);
-      expect((await req({ url: "/api/backlog", cookie: dave })).json().some((x: { id: number }) => x.id === item.id)).toBe(false);
+    it("seul l'admin déplace ; l'auteur valide ce qui est déployé", async () => {
+      const t = (await post("/api/backlog", { kind: "bug", title: "Le calendrier dépasse" }, dave)).json();
+      const move = (status: string, cookie: string) => put(`/api/backlog/${t.id}/status`, { status }, cookie);
+      expect((await move("in_progress", dave)).statusCode).toBe(403);
+      expect((await move("in_progress", alice)).statusCode).toBe(403);
+      expect((await move("nimporte", admin)).statusCode).toBe(400);
+      expect((await move("in_progress", admin)).json()).toMatchObject({ status: "in_progress" });
+      // Pris en charge : l'auteur ne peut plus le supprimer.
+      expect((await del(`/api/backlog/${t.id}`, dave)).statusCode).toBe(404);
+      expect((await move("validated", dave)).statusCode).toBe(403);
+      expect((await move("deployed", admin)).json()).toMatchObject({ status: "deployed" });
+      expect((await move("validated", alice)).statusCode).toBe(403);
+      expect((await move("validated", dave)).json()).toMatchObject({ status: "validated" });
+      const list = (await req({ url: "/api/backlog", cookie: alice })).json();
+      expect(list.find((x: { id: number }) => x.id === t.id).status).toBe("validated");
+    });
+
+    it("commente avec captures, montre les commentateurs, et modère", async () => {
+      const t = (await post("/api/backlog", { kind: "bug", title: "Coches perdues" }, alice)).json();
+      expect((await post(`/api/backlog/${t.id}/comments`, { body: "   " }, dave)).statusCode).toBe(400);
+      const c1 = await post(`/api/backlog/${t.id}/comments`, { body: "Pareil chez moi", images: [{ type: "image/png", data: PNG }] }, dave);
+      expect(c1.statusCode).toBe(201);
+      await post(`/api/backlog/${t.id}/comments`, { body: "Je regarde" }, admin);
+      const full = (await req({ url: `/api/backlog/${t.id}`, cookie: alice })).json();
+      expect(full.thread.map((c: { author: string }) => c.author)).toEqual(["dave", "max_perso"]);
+      expect(full.thread[0].images).toHaveLength(1);
+      expect(full).toMatchObject({ comments: 2, images: 1, commenters: ["dave", "max_perso"] });
+      const [mine, other] = full.thread;
+      // Un joueur ne supprime que ses commentaires ; l'admin, tous.
+      expect((await del(`/api/backlog/comments/${other.id}`, dave)).statusCode).toBe(404);
+      expect((await del(`/api/backlog/comments/${mine.id}`, dave)).json().thread).toHaveLength(1);
+      expect((await del(`/api/backlog/comments/${other.id}`, admin)).json().thread).toHaveLength(0);
+      expect((await post("/api/backlog/999999/comments", { body: "?" }, dave)).statusCode).toBe(404);
+    });
+
+    it("supprime : l'auteur tant que c'est au backlog, l'admin toujours, avec les captures", async () => {
+      const t = (await post("/api/backlog", { kind: "bug", title: "À supprimer", images: [{ type: "image/png", data: PNG }] }, dave)).json();
+      expect((await del(`/api/backlog/${t.id}`, alice)).statusCode).toBe(404);
+      expect((await del(`/api/backlog/${t.id}`, dave)).statusCode).toBe(200);
+      expect((await req({ url: `/api/backlog/images/${t.imageIds[0]}`, cookie: dave })).statusCode).toBe(404);
+      const u = (await post("/api/backlog", { kind: "bug", title: "Modération" }, alice)).json();
+      expect((await del(`/api/backlog/${u.id}`, admin)).statusCode).toBe(200);
     });
 
     it("refuse une écriture venue d'un autre site", async () => {
@@ -390,12 +457,9 @@ describe.skipIf(!url)("API", () => {
       expect(res.statusCode).toBe(403);
     });
 
-    it("limite le nombre de propositions par jour", async () => {
+    it("limite le nombre de tickets par jour", async () => {
       const { rows } = await db.query<{ id: string }>("select id from users where lower(username) = 'dave'");
-      await db.query(
-        "insert into backlog_items (user_id, kind, title) select $1, 'change', 'Idée ' || g from generate_series(1, 20) g",
-        [rows[0].id],
-      );
+      await db.query("insert into backlog_items (user_id, kind, title) select $1, 'change', 'Idée ' || g from generate_series(1, 20) g", [rows[0].id]);
       const res = await post("/api/backlog", { kind: "change", title: "Encore une" }, dave);
       expect(res.statusCode).toBe(429);
       expect(res.json().error).toContain("par jour");

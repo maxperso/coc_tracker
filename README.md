@@ -91,9 +91,12 @@ les rappels dans *Mon compte* (sur iPhone, après avoir installé le site sur l'
 docker compose exec app node dist-server/cli.js list-users
 docker compose exec -it app node dist-server/cli.js reset-password <pseudo>   # coupe aussi ses sessions
 
-# Backlog de la page Commu : lister, changer le statut, supprimer (modération)
+# Admin du backlog (max_perso l'est d'office) : déplace les tickets et modère, depuis l'app
+docker compose exec app node dist-server/cli.js admin <pseudo> [on|off]
+
+# Backlog de la page Commu, en ligne de commande
 docker compose exec app node dist-server/cli.js backlog
-docker compose exec app node dist-server/cli.js backlog-status <id> planned    # open | planned | done | declined
+docker compose exec app node dist-server/cli.js backlog-status <id> in_progress   # backlog | in_progress | deployed | validated
 docker compose exec app node dist-server/cli.js backlog-delete <id>
 ```
 

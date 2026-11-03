@@ -4,8 +4,8 @@ import "@fontsource/inter/latin-600.css";
 import "@fontsource/inter/latin-700.css";
 import "./styles.css";
 
-import type { PlanChecks, PlayerProfile, PlayerRow } from "./lib/api";
-import type { BacklogItem } from "./lib/backlog";
+import type { MeResponse, PlanChecks, PlayerProfile, PlayerRow } from "./lib/api";
+import type { BacklogItem, BacklogTicket } from "./lib/backlog";
 import { createSaver } from "./lib/saver";
 import { api, ApiError } from "./lib/client";
 import { parseExport } from "./lib/exportParse";
@@ -18,8 +18,8 @@ import { canInstall, disablePush, enablePush, install, isIos, isStandalone, onPw
 import { applyTheme, loadTheme, saveTheme, type ThemePref } from "./lib/theme";
 import { buildVillage, type Village } from "./lib/village";
 import { authView, type AuthMode, type AuthState } from "./ui/auth";
-import { backlogView, resetBacklogDraft, type BacklogActions, type BacklogState } from "./ui/backlog";
-import { communityView, dashboardView, tabsFor, themeControl, type Tab } from "./ui/dashboard";
+import { backlogView, resetCommentDraft, resetTicketDraft, type BacklogActions, type BacklogState } from "./ui/backlog";
+import { commuSwitch, dashboardView, friendsSection, tabsFor, themeControl, type CommuTab, type Tab } from "./ui/dashboard";
 import { h } from "./ui/dom";
 import { homeView } from "./ui/home";
 import { landingView } from "./ui/landing";
@@ -52,6 +52,10 @@ const state: {
   tab: Tab;
   players: { rows: PlayerRow[] | null; error?: string };
   backlog: BacklogState;
+  /** Administrateur du backlog. */
+  admin: boolean;
+  /** Page Commu sans export : amis ou backlog. */
+  commuTab: CommuTab;
   friend: (Loaded & { username: string; settings: Settings; demo?: boolean }) | null;
   friendTab: Tab;
 } = {
@@ -65,6 +69,8 @@ const state: {
   tab: "summary",
   players: { rows: null },
   backlog: { rows: null },
+  admin: false,
+  commuTab: "players",
   friend: null,
   friendTab: "summary",
 };
@@ -143,7 +149,7 @@ async function boot(): Promise<void> {
     () => {},
   );
   try {
-    state.me = (await api.me()).username;
+    setMe(await api.me());
     await loadMine();
   } catch (e) {
     // Pas de session (401) : rien à signaler. Sinon, le serveur ne répond pas.
@@ -202,8 +208,13 @@ async function authStep(run: () => Promise<void>) {
   }
 }
 
-async function signedIn(username: string) {
-  state.me = username;
+function setMe(me: MeResponse) {
+  state.me = me.username;
+  state.admin = me.admin;
+}
+
+async function signedIn(me: MeResponse) {
+  setMe(me);
   state.auth = { mode: "login", busy: false, inviteRequired: state.auth.inviteRequired };
   await loadMine();
   render();
@@ -211,13 +222,13 @@ async function signedIn(username: string) {
 
 const authActions = {
   onMode: (mode: AuthMode) => setAuth(mode, mode === "reset" || mode === "forgot" ? { email: state.auth.email } : {}),
-  onLogin: (d: { username: string; password: string }) => void authStep(async () => signedIn((await api.login(d.username, d.password)).username)),
+  onLogin: (d: { username: string; password: string }) => void authStep(async () => signedIn(await api.login(d.username, d.password))),
   onRegister: (d: { username: string; email: string; password: string; inviteCode: string }) =>
     void authStep(async () => {
       const r = await api.register(d);
       setAuth("verify", { username: r.username, info: r.message });
     }),
-  onVerify: (d: { username: string; code: string }) => void authStep(async () => signedIn((await api.verify(d.username, d.code)).username)),
+  onVerify: (d: { username: string; code: string }) => void authStep(async () => signedIn(await api.verify(d.username, d.code))),
   onResend: (username: string) =>
     void authStep(async () => {
       const r = await api.resend(username);
@@ -229,7 +240,7 @@ const authActions = {
       setAuth("reset", { email });
     }),
   onReset: (d: { email: string; code: string; password: string }) =>
-    void authStep(async () => signedIn((await api.reset(d.email, d.code, d.password)).username)),
+    void authStep(async () => signedIn(await api.reset(d.email, d.code, d.password))),
   onHome: () => {
     state.view = "landing";
     render();
@@ -359,9 +370,32 @@ async function loadBacklog() {
   render();
 }
 
-/** Remplace une proposition dans la liste (réponse du serveur ou vote affiché tout de suite). */
+/** Met à jour un ticket dans le tableau et dans le ticket ouvert. */
 function putBacklogItem(it: BacklogItem) {
-  state.backlog = { ...state.backlog, rows: (state.backlog.rows ?? []).map((x) => (x.id === it.id ? it : x)) };
+  const b = state.backlog;
+  const ticket = b.ticket?.data && b.ticket.id === it.id ? { ...b.ticket, data: { ...b.ticket.data, ...it } } : b.ticket;
+  state.backlog = { ...b, ticket, rows: (b.rows ?? []).map((x) => (x.id === it.id ? it : x)) };
+}
+
+/** Ticket ouvert rechargé (après un commentaire) : sa ligne du tableau suit. */
+function putTicket(t: BacklogTicket) {
+  const { imageIds: _, thread: __, ...it } = t;
+  putBacklogItem(it);
+  state.backlog = { ...state.backlog, ticket: { id: t.id, data: t } };
+}
+
+async function openTicket(id: number | null) {
+  state.backlog = { ...state.backlog, formError: undefined, ticket: id == null ? undefined : { id } };
+  render();
+  window.scrollTo(0, 0);
+  if (id == null) return void loadBacklog();
+  try {
+    const data = await api.ticket(id);
+    if (state.backlog.ticket?.id === id) state.backlog = { ...state.backlog, ticket: { id, data } };
+  } catch (e) {
+    if (state.backlog.ticket?.id === id) state.backlog = { ...state.backlog, ticket: { id, error: handleError(e) } };
+  }
+  render();
 }
 
 const backlogActions: BacklogActions = {
@@ -369,8 +403,9 @@ const backlogActions: BacklogActions = {
     state.backlog = { ...state.backlog, busy: true, formError: undefined };
     render();
     try {
-      const it = await api.addBacklog(d);
-      resetBacklogDraft();
+      const t = await api.addTicket(d);
+      resetTicketDraft();
+      const { imageIds: _, thread: __, ...it } = t;
       state.backlog = { ...state.backlog, busy: false, rows: [it, ...(state.backlog.rows ?? [])] };
     } catch (e) {
       state.backlog = { ...state.backlog, busy: false, formError: handleError(e) };
@@ -378,25 +413,60 @@ const backlogActions: BacklogActions = {
     render();
   },
   onVote: async (id, vote) => {
-    const before = state.backlog.rows?.find((x) => x.id === id);
+    const before = state.backlog.rows?.find((x) => x.id === id) ?? state.backlog.ticket?.data;
     if (!before) return;
     // Affiché tout de suite, corrigé par la réponse du serveur.
     putBacklogItem({ ...before, voted: vote, votes: before.votes + (vote ? 1 : -1) });
     render();
     try {
-      putBacklogItem(await api.voteBacklog(id, vote));
+      putBacklogItem(await api.voteTicket(id, vote));
     } catch (e) {
       putBacklogItem(before);
-      state.backlog = { ...state.backlog, formError: handleError(e) };
+      toast(handleError(e));
+    }
+    render();
+  },
+  onMove: async (id, status) => {
+    const before = state.backlog.rows?.find((x) => x.id === id) ?? state.backlog.ticket?.data;
+    if (!before) return;
+    putBacklogItem({ ...before, status, movedAt: new Date().toISOString() });
+    render();
+    try {
+      putBacklogItem(await api.moveTicket(id, status));
+    } catch (e) {
+      putBacklogItem(before);
+      toast(handleError(e));
     }
     render();
   },
   onDelete: async (id) => {
     try {
-      await api.deleteBacklog(id);
-      state.backlog = { ...state.backlog, rows: (state.backlog.rows ?? []).filter((x) => x.id !== id) };
+      await api.deleteTicket(id);
+      state.backlog = { ...state.backlog, ticket: undefined, rows: (state.backlog.rows ?? []).filter((x) => x.id !== id) };
     } catch (e) {
-      state.backlog = { ...state.backlog, formError: handleError(e) };
+      toast(handleError(e));
+    }
+    render();
+  },
+  onOpen: (id) => void openTicket(id),
+  onComment: async (id, d) => {
+    state.backlog = { ...state.backlog, busy: true, formError: undefined };
+    render();
+    try {
+      const t = await api.addComment(id, d);
+      resetCommentDraft();
+      state.backlog = { ...state.backlog, busy: false };
+      putTicket(t);
+    } catch (e) {
+      state.backlog = { ...state.backlog, busy: false, formError: handleError(e) };
+    }
+    render();
+  },
+  onDeleteComment: async (id) => {
+    try {
+      putTicket(await api.deleteComment(id));
+    } catch (e) {
+      toast(handleError(e));
     }
     render();
   },
@@ -430,6 +500,8 @@ async function logout(everywhere = false) {
   state.mine = null;
   state.friend = null;
   state.players = { rows: null };
+  state.backlog = { rows: null };
+  state.admin = false;
   state.view = "landing";
   state.auth = { mode: "login", busy: false, inviteRequired: state.auth.inviteRequired };
   render();
@@ -437,8 +509,21 @@ async function logout(everywhere = false) {
 
 function goTab(t: Tab) {
   state.tab = t;
-  if (t === "players") {
-    void loadPlayers();
+  if (t === "players") void loadPlayers();
+  if (t === "backlog") {
+    state.backlog = { ...state.backlog, ticket: undefined, formError: undefined };
+    void loadBacklog();
+  }
+  render();
+  window.scrollTo(0, 0);
+}
+
+/** Page Commu sans export : amis ou backlog. */
+function goCommu(t: CommuTab) {
+  state.commuTab = t;
+  if (t === "players") void loadPlayers();
+  else {
+    state.backlog = { ...state.backlog, ticket: undefined, formError: undefined };
     void loadBacklog();
   }
   render();
@@ -456,22 +541,29 @@ function playersPage(): HTMLElement {
       h("div", null, h("h1", { class: "title" }, "Commu"), h("p", { class: "lead" }, "Le classement de tes amis, et les idées pour améliorer COC Tracker.")),
       h("button", { type: "button", class: "btn btn-ghost", onClick: () => ((state.view = "home"), render()) }, "Coller mon export"),
     ),
-    communityView(playersView({ ...state.players, me: state.me!, onOpen: (u) => void openPlayer(u) }), backlogView(state.backlog, backlogActions, render)),
+    commuSwitch(state.commuTab, goCommu),
+    state.commuTab === "backlog"
+      ? backlogView(state.backlog, backlogActions, { admin: state.admin, rerender: render })
+      : friendsSection(playersView({ ...state.players, me: state.me!, onOpen: (u) => void openPlayer(u) })),
   );
 }
 
 /** Page affichée : quand elle change, les blocs apparaissent en fondu. */
 let shownPage = "";
-const pageKey = () =>
-  state.view === "dash"
-    ? `dash:${state.friend ? `${state.friend.username}:${state.friendTab}` : state.tab}`
+const pageKey = () => {
+  const ticket = state.backlog.ticket ? `:ticket${state.backlog.ticket.id}` : "";
+  return state.view === "dash"
+    ? `dash:${state.friend ? `${state.friend.username}:${state.friendTab}` : state.tab}${state.tab === "backlog" ? ticket : ""}`
     : state.view === "auth"
       ? `auth:${state.auth.mode}`
-      : state.view;
+      : state.view === "players"
+        ? `players:${state.commuTab}${ticket}`
+        : state.view;
+};
 
 /** Blocs animés à l'entrée d'une page, l'un après l'autre. */
 const ENTER_BLOCKS =
-  ".section-head, .strategy, .banner, .village-switch, .tile, .card, .landing-hero, .landing-section, .feature, .player, .choice, .stepper, .notice";
+  ".section-head, .strategy, .banner, .village-switch, .tile, .card, .landing-hero, .landing-section, .feature, .player, .choice, .stepper, .notice, .kb-col, .bl-comment";
 const MAX_STAGGER = 10;
 let enterTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -609,6 +701,8 @@ function renderView(): void {
     players: state.players,
     backlog: state.backlog,
     backlogActions,
+    admin: state.admin,
+    rerender: render,
     tab,
     onTab: (t) => {
       if (friend) {

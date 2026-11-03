@@ -2,7 +2,8 @@
 // Usage : node dist-server/cli.js reset-password <pseudo>   (nouveau mot de passe lu sur l'entrée standard)
 //         node dist-server/cli.js list-users
 //         node dist-server/cli.js backlog                                (propositions de la communauté)
-//         node dist-server/cli.js backlog-status <id> <open|planned|done|declined>
+//         node dist-server/cli.js backlog-status <id> <backlog|in_progress|deployed|validated>
+//         node dist-server/cli.js admin <pseudo> [on|off]                (déplace et modère les tickets)
 //         node dist-server/cli.js backlog-delete <id>                    (modération)
 import { createInterface } from "node:readline/promises";
 import { BACKLOG_STATUSES, KIND_LABEL, STATUS_LABEL, type BacklogKind, type BacklogStatus } from "../src/lib/backlog";
@@ -30,6 +31,9 @@ try {
       [arg, await hashPassword(password)],
     );
     console.log(r.rowCount ? `Mot de passe de ${arg} changé.` : `Joueur ${arg} introuvable.`);
+  } else if (cmd === "admin" && arg && (arg2 === undefined || arg2 === "on" || arg2 === "off")) {
+    const r = await db.query("update users set is_admin = $2 where lower(username) = lower($1)", [arg, arg2 !== "off"]);
+    console.log(r.rowCount ? `${arg} : ${arg2 === "off" ? "n'est plus admin" : "admin"}.` : `Joueur ${arg} introuvable.`);
   } else if (cmd === "backlog") {
     const { rows } = await db.query<{ id: string; kind: BacklogKind; status: BacklogStatus; title: string; author: string; votes: number }>(
       `select b.id, b.kind, b.status, b.title, u.username as author,
@@ -44,7 +48,7 @@ try {
     const r = await db.query("delete from backlog_items where id = $1", [Number(arg)]);
     console.log(r.rowCount ? `#${arg} supprimée.` : `Proposition #${arg} introuvable.`);
   } else {
-    console.log(`Commandes : list-users | reset-password <pseudo> | backlog | backlog-status <id> <${BACKLOG_STATUSES.join("|")}> | backlog-delete <id>`);
+    console.log(`Commandes : list-users | reset-password <pseudo> | admin <pseudo> [on|off] | backlog | backlog-status <id> <${BACKLOG_STATUSES.join("|")}> | backlog-delete <id>`);
   }
 } finally {
   await db.end();

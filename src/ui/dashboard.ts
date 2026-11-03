@@ -25,7 +25,7 @@ import { backlogView, type BacklogActions, type BacklogState } from "./backlog";
 import { orderEditor } from "./order";
 import { sprite } from "./sprite";
 
-export type Tab = "summary" | "plan" | "order" | "heroes" | "buildings" | "lab" | "progress" | "players" | "compare" | "more";
+export type Tab = "summary" | "plan" | "order" | "heroes" | "buildings" | "lab" | "progress" | "players" | "backlog" | "compare" | "more";
 
 /** Navigation principale : 5 entrées. Héros, bâtiments et labo sont regroupés sous « Village ». */
 type NavKey = "summary" | "plan" | "village" | "progress" | "players" | "compare";
@@ -38,8 +38,11 @@ const NAV: { key: NavKey; label: string; icon: IconName }[] = [
   { key: "compare", label: "Comparer", icon: "compare" },
 ];
 const VILLAGE_TABS: Tab[] = ["heroes", "buildings", "lab"];
+/** « Commu » regroupe les amis et le backlog. */
+export type CommuTab = "players" | "backlog";
+const COMMU_TABS: Tab[] = ["players", "backlog"];
 const navOf = (t: Tab): NavKey | null =>
-  VILLAGE_TABS.includes(t) ? "village" : t === "order" ? "plan" : t === "more" ? null : (t as NavKey);
+  VILLAGE_TABS.includes(t) ? "village" : COMMU_TABS.includes(t) ? "players" : t === "order" ? "plan" : t === "more" ? null : (t as NavKey);
 
 /** Sous-onglet « Village » par défaut : celui de la stratégie. */
 const villageDefault = (s: Settings): Tab => (s.focus === "buildings" ? "buildings" : "heroes");
@@ -47,9 +50,9 @@ const villageDefault = (s: Settings): Tab => (s.focus === "buildings" ? "buildin
 /** Onglets : le profil d'un ami est en lecture seule, sans « Commu » ni « Plus ». */
 export function tabsFor(s: Settings, readOnly = false): Tab[] {
   const tabs: Tab[] = s.focus === "buildings"
-    ? ["summary", "plan", "order", "buildings", "heroes", "lab", "progress", "players", "more"]
-    : ["summary", "plan", "order", "heroes", "buildings", "lab", "progress", "players", "more"];
-  return readOnly ? [...tabs.filter((t) => t !== "players" && t !== "more" && (t !== "order" || s.focus === "custom")), "compare"] : tabs;
+    ? ["summary", "plan", "order", "buildings", "heroes", "lab", "progress", "players", "backlog", "more"]
+    : ["summary", "plan", "order", "heroes", "buildings", "lab", "progress", "players", "backlog", "more"];
+  return readOnly ? [...tabs.filter((t) => !COMMU_TABS.includes(t) && t !== "more" && (t !== "order" || s.focus === "custom")), "compare"] : tabs;
 }
 
 export interface DashboardProps {
@@ -65,6 +68,10 @@ export interface DashboardProps {
   players: { rows: PlayerRow[] | null; error?: string };
   backlog: BacklogState;
   backlogActions: BacklogActions;
+  /** Administrateur : déplace et modère les tickets du backlog. */
+  admin: boolean;
+  /** Redessine la page sans rien recharger (filtre, brouillon…). */
+  rerender: () => void;
   tab: Tab;
   onTab: (t: Tab) => void;
   onStrategy: () => void;
@@ -137,7 +144,12 @@ function navItems(p: DashboardProps, cls: string): HTMLElement[] {
         type: "button",
         class: cls,
         "aria-current": n.key === current ? "page" : undefined,
-        onClick: () => p.onTab(n.key === "village" ? (VILLAGE_TABS.includes(p.tab) ? p.tab : villageDefault(p.settings)) : n.key),
+        onClick: () =>
+          p.onTab(
+            n.key === "village" ? (VILLAGE_TABS.includes(p.tab) ? p.tab : villageDefault(p.settings))
+            : n.key === "players" ? (COMMU_TABS.includes(p.tab) ? p.tab : "players")
+            : n.key,
+          ),
       },
       icon(n.icon, cls === "bnav-item" ? 22 : 18),
       h("span", null, n.label),
@@ -228,6 +240,27 @@ function villageSwitch(p: DashboardProps): HTMLElement {
         { type: "button", role: "tab", class: "vs-item", "aria-selected": String(p.tab === t), onClick: () => p.onTab(t) },
         e ? h("span", { class: "vs-icon" }, sprite(cat, e, cat === "buildings" ? e.levels?.at(-1)?.l : undefined, "sm")) : null,
         h("span", null, label[t]),
+      );
+    }),
+  );
+}
+
+/** Choix Amis / Backlog en haut de la page Commu, comme dans Village. */
+export function commuSwitch(current: CommuTab, onPick: (t: CommuTab) => void): HTMLElement {
+  const items: { t: CommuTab; label: string; pic: string }[] = [
+    { t: "players", label: "Amis", pic: "Clan Castle" },
+    { t: "backlog", label: "Backlog", pic: "Builder's Hut" },
+  ];
+  return h(
+    "div",
+    { class: "village-switch vs-2", role: "tablist", "aria-label": "Commu" },
+    items.map(({ t, label, pic }) => {
+      const e = findByName(gameIndex(), "buildings", pic);
+      return h(
+        "button",
+        { type: "button", role: "tab", class: "vs-item", "aria-selected": String(current === t), onClick: () => onPick(t) },
+        e ? h("span", { class: "vs-icon" }, sprite("buildings", e, e.levels?.at(-1)?.l, "sm")) : null,
+        h("span", null, label),
       );
     }),
   );
@@ -1364,26 +1397,24 @@ function compareTab(p: DashboardProps, f: Forecast): HTMLElement {
 /* ---------- Commu : amis et backlog ---------- */
 
 function playersTab(p: DashboardProps): HTMLElement {
+  const tab: CommuTab = p.tab === "backlog" ? "backlog" : "players";
   return h(
     "section",
     { class: "stack" },
-    sectionHead("Commu", "Le classement de tes amis, et les idées pour améliorer COC Tracker."),
-    communityView(playersView({ ...p.players, me: p.me, onOpen: p.onOpenPlayer }), backlogView(p.backlog, p.backlogActions, () => p.onTab("players"))),
+    commuSwitch(tab, (t) => p.onTab(t)),
+    tab === "backlog"
+      ? backlogView(p.backlog, p.backlogActions, { admin: p.admin, rerender: p.rerender })
+      : friendsSection(playersView({ ...p.players, me: p.me, onOpen: p.onOpenPlayer })),
   );
 }
 
-/** Amis à gauche, backlog à droite ; l'un sous l'autre sur téléphone. */
-export function communityView(players: HTMLElement, backlog: HTMLElement): HTMLElement {
+/** Classement des amis, sous le choix Amis / Backlog. */
+export function friendsSection(players: HTMLElement): HTMLElement {
   return h(
-    "div",
-    { class: "commu-grid" },
-    h(
-      "section",
-      { class: "stack", "aria-labelledby": "friends-title" },
-      h("div", null, h("h2", { id: "friends-title", class: "section-title" }, "Amis"), h("p", { class: "muted" }, "Classés par avancement du village. Touche un joueur pour voir son plan.")),
-      players,
-    ),
-    backlog,
+    "section",
+    { class: "stack", "aria-labelledby": "friends-title" },
+    h("div", null, h("h2", { id: "friends-title", class: "section-title" }, "Amis"), h("p", { class: "muted" }, "Classés par avancement du village. Touche un joueur pour voir son plan.")),
+    players,
   );
 }
 
@@ -1399,7 +1430,7 @@ export function dashboardView(p: DashboardProps): HTMLElement {
     : p.tab === "buildings" ? buildingsTab(p, f)
     : p.tab === "lab" ? labTab(p, f)
     : p.tab === "progress" ? progressTab(p, f)
-    : p.tab === "players" && !readOnly(p) ? playersTab(p)
+    : COMMU_TABS.includes(p.tab) && !readOnly(p) ? playersTab(p)
     : p.tab === "compare" && readOnly(p) && p.compare ? compareTab(p, f)
     : p.tab === "more" && !readOnly(p) ? moreTab(p, f)
     : summaryTab(p, f);
