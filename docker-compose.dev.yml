@@ -1,0 +1,42 @@
+# Dev : tout le site dans Docker, connecté d'office en « dev » (admin), avec un village, un ami et des tickets de test.
+# Lancement : docker compose -f docker-compose.dev.yml up -d --build   puis http://localhost:3001
+# Base séparée de la prod (volume pgdata-dev). Remise à zéro : docker compose -f docker-compose.dev.yml down -v
+name: coc-tracker-dev
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: coc
+      POSTGRES_USER: coc
+      POSTGRES_PASSWORD: dev
+    volumes:
+      - pgdata-dev:/var/lib/postgresql/data
+    ports:
+      # Pour « npm run dev:server » sur la même base : DATABASE_URL=postgres://coc:dev@127.0.0.1:55433/coc
+      - "127.0.0.1:55433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U coc -d coc"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  app:
+    build: .
+    image: coc-tracker:dev
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      # development : obligatoire pour DEV_LOGIN (refusé en production), et pas besoin de SMTP (emails dans les logs).
+      NODE_ENV: development
+      DATABASE_URL: postgres://coc:dev@db:5432/coc
+      JWT_SECRET: dev-local-seulement-0123456789abcdef
+      APP_ORIGIN: http://localhost:3001
+      COOKIE_SECURE: "false"
+      DEV_LOGIN: ${DEV_LOGIN:-dev}
+    ports:
+      # Sur ta machine seulement : n'importe qui atteignant ce port serait connecté d'office.
+      - "127.0.0.1:3001:3000"
+
+volumes:
+  pgdata-dev:

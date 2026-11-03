@@ -1,6 +1,7 @@
 import { buildApp } from "./app";
 import { loadConfig } from "./config";
 import { createPool, migrate } from "./db";
+import { seedDev } from "./dev";
 import { consoleMailer, smtpMailer } from "./mailer";
 import { startScheduler, webPushSender } from "./push";
 
@@ -18,6 +19,11 @@ for (let attempt = 1; ; attempt++) {
     console.log(`Base indisponible (essai ${attempt}), nouvel essai dans 2 s…`);
     await new Promise((r) => setTimeout(r, 2000));
   }
+}
+
+if (cfg.devLogin) {
+  await seedDev(db, cfg.devLogin);
+  console.warn(`MODE DEV : tout visiteur est connecté d'office en tant que « ${cfg.devLogin} » (admin). Jamais en production.`);
 }
 
 const smtp = cfg.smtp ? smtpMailer(cfg.smtp) : null;

@@ -57,6 +57,20 @@ export function clearSession(reply: FastifyReply, cfg: Config) {
  * (token_version incrémenté) ou si le compte n'existe plus.
  */
 export async function readSession(req: FastifyRequest, cfg: Config, db: Db): Promise<SessionUser | null> {
+  const session = await readCookie(req, cfg, db);
+  // Mode dev : sans session valide, on est le compte de test (jamais en production, voir loadConfig).
+  return session ?? (cfg.devLogin ? devUser(db, cfg.devLogin) : null);
+}
+
+async function devUser(db: Db, username: string): Promise<SessionUser | null> {
+  const { rows } = await db.query<{ id: string; username: string; is_admin: boolean }>(
+    "select id, username, is_admin from users where lower(username) = lower($1)",
+    [username],
+  );
+  return rows[0] ? { id: Number(rows[0].id), username: rows[0].username, admin: rows[0].is_admin } : null;
+}
+
+async function readCookie(req: FastifyRequest, cfg: Config, db: Db): Promise<SessionUser | null> {
   const token = req.cookies[cookieName(cfg)];
   if (!token) return null;
   try {

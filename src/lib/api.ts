@@ -13,6 +13,8 @@ export interface MeResponse {
 export interface AuthConfigResponse {
   /** L'inscription demande un code d'invitation. */
   inviteRequired: boolean;
+  /** Mode dev : pseudo du compte de test connecté d'office ; null en production. */
+  devLogin: string | null;
 }
 
 /** Réponse quand un code vient (peut-être) de partir par email. */

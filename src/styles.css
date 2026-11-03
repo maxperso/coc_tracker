@@ -3888,3 +3888,33 @@ select.input {
     animation: none;
   }
 }
+
+/* ---------- Mode dev ---------- */
+.dev-badge {
+  position: fixed;
+  left: 12px;
+  bottom: calc(12px + env(safe-area-inset-bottom));
+  z-index: 40;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: #d9480f;
+  color: #fff;
+  font-size: 0.75rem;
+  font-weight: 600;
+  box-shadow: 0 6px 18px -8px rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+}
+
+.dev-badge strong {
+  letter-spacing: 0.08em;
+}
+
+/* Au-dessus de la barre de navigation du bas. */
+@media (max-width: 1023px) {
+  .dev-badge {
+    bottom: calc(76px + env(safe-area-inset-bottom));
+  }
+}

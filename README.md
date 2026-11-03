@@ -9,9 +9,19 @@ Les calculs se font dans le navigateur. Le serveur garde les comptes, les export
 
 ## Développement
 
+Le plus simple : tout le site dans Docker, **connecté d'office** en `dev` (admin), avec un village, un ami
+et des tickets de test. Une pastille « DEV » rappelle qu'on n'est pas sur le vrai site.
+
+```bash
+docker compose -f docker-compose.dev.yml up -d --build      # http://localhost:3001
+docker compose -f docker-compose.dev.yml down -v            # tout effacer (base de dev comprise)
+```
+
+Pour modifier le code avec rechargement à chaud :
+
 ```bash
 npm install
-cp .env.example .env                # remplir, et décommenter DATABASE_URL et APP_ORIGIN de dev
+cp .env.example .env                # remplir, décommenter DATABASE_URL, APP_ORIGIN et DEV_LOGIN de dev
 docker compose up -d db             # Postgres seul (ou un Postgres local)
 npm run dev:server                  # API sur :3000
 npm run dev                         # site sur :5173, /api est relayé vers :3000

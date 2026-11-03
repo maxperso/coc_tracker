@@ -7,6 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildApp } from "../server/app";
 import { loadConfig } from "../server/config";
 import { createPool, migrate, type Db } from "../server/db";
+import { seedDev } from "../server/dev";
 import type { Mail } from "../server/mailer";
 import { isAllowedEndpoint, rebuildQueue, sendDue, type PushSubscriptionRow } from "../server/push";
 import { LATEST_RELEASE } from "../src/lib/changelog";
@@ -502,6 +503,39 @@ describe.skipIf(!url)("API", () => {
       expect(now.tickets.map((x: { id: number }) => x.id)).toEqual([t.id]);
       await seen(alice, LATEST_RELEASE, now.asOf);
       expect((await req({ url: "/api/me/whats-new", cookie: alice })).json().tickets).toEqual([]);
+    });
+  });
+
+  describe("mode dev", () => {
+    let dev: FastifyInstance;
+    beforeAll(async () => {
+      await seedDev(db, "dev");
+      await seedDev(db, "dev"); // deux démarrages : rien n'est créé en double
+      const cfg = loadConfig({ DATABASE_URL: url, JWT_SECRET: "x".repeat(40), APP_ORIGIN: ORIGIN, DEV_LOGIN: "dev" });
+      dev = await buildApp(cfg, db, { send: async () => {} });
+    });
+    afterAll(async () => {
+      await dev?.close();
+    });
+
+    it("connecte d'office le compte de test, admin, avec son village", async () => {
+      expect((await dev.inject({ url: "/api/auth/config" })).json().devLogin).toBe("dev");
+      expect((await dev.inject({ url: "/api/auth/me" })).json()).toEqual({ username: "dev", admin: true });
+      const profile = (await dev.inject({ url: "/api/players/dev" })).json();
+      expect(profile.exports).toHaveLength(1);
+      const { rows } = await db.query("select count(*)::int as n from users where lower(username) in ('dev', 'ami_dev')");
+      expect(rows[0].n).toBe(2);
+    });
+
+    it("une vraie session reste prioritaire", async () => {
+      const res = await dev.inject({ method: "POST", url: "/api/auth/login", payload: { username: "alice", password: "motdepasse1" }, headers: { origin: ORIGIN } });
+      const cookie = res.cookies.find((c) => c.name === "coc_session")!;
+      expect((await dev.inject({ url: "/api/auth/me", headers: { cookie: `coc_session=${cookie.value}` } })).json().username).toBe("Alice");
+    });
+
+    it("n'existe pas sans DEV_LOGIN", async () => {
+      expect((await req({ url: "/api/auth/me" })).statusCode).toBe(401);
+      expect((await req({ url: "/api/auth/config" })).json().devLogin).toBeNull();
     });
   });
 });

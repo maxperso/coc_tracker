@@ -37,7 +37,15 @@ export interface Config {
   smtp: SmtpConfig | null;
   /** Absent : les notifications push sont désactivées. */
   vapid: VapidConfig | null;
+  /**
+   * Mode dev : pseudo du compte de test, connecté d'office (admin, village et données d'exemple).
+   * Interdit en production : le serveur refuse de démarrer.
+   */
+  devLogin: string | null;
 }
+
+/** Même règle que les pseudos des comptes. */
+const USERNAME = /^[A-Za-z0-9_-]{3,20}$/;
 
 function required(env: NodeJS.ProcessEnv, name: string): string {
   const v = env[name];
@@ -70,6 +78,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       ? { publicKey: env.VAPID_PUBLIC_KEY, privateKey: env.VAPID_PRIVATE_KEY, subject: env.VAPID_SUBJECT || "mailto:admin@localhost" }
       : null;
 
+  const devLogin = env.DEV_LOGIN?.trim() || null;
+  if (devLogin && production) throw new Error("DEV_LOGIN est interdit en production : tout visiteur serait connecté d'office.");
+  if (devLogin && !USERNAME.test(devLogin)) throw new Error("DEV_LOGIN : 3 à 20 lettres, chiffres, - ou _.");
+
   return {
     port: Number(env.PORT ?? 3000),
     host: env.HOST ?? "0.0.0.0",
@@ -83,5 +95,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     staticDir: env.STATIC_DIR ?? null,
     smtp,
     vapid,
+    devLogin,
   };
 }

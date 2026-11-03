@@ -143,12 +143,14 @@ async function loadMine(): Promise<void> {
 }
 
 async function boot(): Promise<void> {
-  api.authConfig().then(
+  const config = api.authConfig().then(
     (c) => {
       state.auth.inviteRequired = c.inviteRequired;
+      if (c.devLogin) devBadge(c.devLogin);
       if (state.view === "auth") render();
+      return c;
     },
-    () => {},
+    () => null,
   );
   try {
     setMe(await api.me());
@@ -157,10 +159,18 @@ async function boot(): Promise<void> {
     // Pas de session (401) : rien à signaler. Sinon, le serveur ne répond pas.
     if (!(e instanceof ApiError && e.status === 401)) state.landingError = "Le serveur ne répond pas pour le moment : la connexion est indisponible.";
   }
-  // La page d'accueil s'affiche toujours en premier, connecté ou non.
-  state.view = "landing";
+  // La page d'accueil s'affiche toujours en premier, connecté ou non. En mode dev : directement le site.
+  state.view = (await config)?.devLogin && state.me ? (state.mine ? "dash" : "home") : "landing";
   render();
   void showWhatsNew();
+}
+
+/** Mode dev : pastille permanente, pour ne jamais confondre avec le vrai site. */
+function devBadge(username: string) {
+  if (document.querySelector(".dev-badge")) return;
+  document.body.append(
+    h("div", { class: "dev-badge", role: "status", title: "Serveur de dev : connecté d'office, données de test" }, h("strong", null, "DEV"), ` ${username} · admin`),
+  );
 }
 
 /** Depuis la page d'accueil : ton dashboard, ou l'écran pour coller l'export s'il n'y en a pas encore. */

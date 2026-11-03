@@ -173,7 +173,7 @@ export async function buildApp(cfg: Config, db: Db, mailer: Mailer, push: PushSe
   const strict = { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } };
   const veryStrict = { config: { rateLimit: { max: 5, timeWindow: "1 minute" } } };
 
-  app.get("/api/auth/config", async () => ({ inviteRequired: cfg.inviteCode != null }) satisfies AuthConfigResponse);
+  app.get("/api/auth/config", async () => ({ inviteRequired: cfg.inviteCode != null, devLogin: cfg.devLogin }) satisfies AuthConfigResponse);
 
   app.post("/api/auth/register", strict, async (req, reply) => {
     const body = Register.safeParse(req.body);
