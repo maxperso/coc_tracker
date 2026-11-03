@@ -20,6 +20,8 @@ export interface UpgradeInfo {
   /** Chantiers prévus par le plan pour cet élément. */
   planned: Segment[];
   exportUnix: number;
+  /** Niveau mis en avant (celui sur lequel on a cliqué dans le plan). */
+  focusLevel?: number;
 }
 
 const SCOPE: Record<string, BoostScope> = { heroes: "builder", buildings: "builder", traps: "builder", troops: "research", spells: "research", pets: "none" };
@@ -66,7 +68,7 @@ export function upgradeDialog(info: UpgradeInfo): HTMLDialogElement {
     rows.push(
       h(
         "tr",
-        { class: locked ? "is-locked" : seg ? "is-planned" : "" },
+        { class: [locked ? "is-locked" : seg ? "is-planned" : "", to === info.focusLevel ? "is-focus" : ""].join(" ").trim() || undefined },
         h("th", { scope: "row" }, `${from} → ${to}`),
         h("td", null, h("span", { class: "ui-jam" }, fmtDuration(jamSec)), h("span", { class: "ui-base" }, fmtDuration(step.seconds))),
         h(
@@ -143,4 +145,5 @@ export function openUpgradeInfo(info: UpgradeInfo): void {
   const dlg = upgradeDialog(info);
   document.body.append(dlg);
   dlg.showModal();
+  dlg.querySelector(".is-focus")?.scrollIntoView({ block: "center" });
 }

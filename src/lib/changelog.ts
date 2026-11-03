@@ -19,6 +19,13 @@ export interface Release {
 
 export const CHANGELOG: Release[] = [
   {
+    id: 10,
+    date: "2026-11-03",
+    changes: [
+      { kind: "ui", text: "Dans le plan, touche une amélioration (« Lance Roi 105 → 106 ») pour ouvrir sa fiche : durée et coût de chaque niveau, et quand le plan les lance." },
+    ],
+  },
+  {
     id: 9,
     date: "2026-11-03",
     changes: [

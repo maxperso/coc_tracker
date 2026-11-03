@@ -4338,3 +4338,55 @@ select.input {
 .ca-other:focus-within {
   opacity: 1;
 }
+
+/* ---------- Plan : un clic sur une amélioration ouvre sa fiche ---------- */
+.ev-open,
+.todo-open,
+.brow-open {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.ev-open > span,
+.todo-open > span,
+.brow-open > span {
+  display: block;
+  max-width: 100%;
+}
+
+.ev-open:hover .ev-text,
+.todo-open:hover .todo-text,
+.brow-open:hover .brow-name {
+  color: var(--done-strong);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+
+.ev-open:focus-visible,
+.todo-open:focus-visible,
+.brow-open:focus-visible {
+  outline: 2px solid var(--text);
+  outline-offset: 4px;
+  border-radius: 6px;
+}
+
+/* La ligne du niveau cliqué dans le plan. */
+.ui-table tr.is-focus {
+  background: var(--done-tint);
+}
+
+.ui-table tr.is-focus th {
+  box-shadow: inset 3px 0 0 var(--done);
+}

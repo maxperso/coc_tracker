@@ -26,6 +26,7 @@ import { confirmAction, type ConfirmSpec } from "./confirmAction";
 import { orderEditor } from "./order";
 import { progressionView } from "./progression";
 import { costTag, res } from "./resources";
+import { openUpgradeInfo } from "./upgradeInfo";
 import { sprite } from "./sprite";
 
 export type Tab = "summary" | "plan" | "order" | "heroes" | "buildings" | "lab" | "progress" | "players" | "backlog" | "compare" | "more";
@@ -114,6 +115,23 @@ export interface DashboardProps {
 }
 
 const readOnly = (p: DashboardProps) => p.owner.toLowerCase() !== p.me.toLowerCase();
+
+/** Fiche d'un élément du plan (niveaux à venir, durées, coûts), ouverte sur le niveau `toLevel`. */
+function openInfo(p: DashboardProps, r: ChainResult, toLevel: number) {
+  const c = r.chain;
+  const building = c.category === "buildings" || c.category === "traps";
+  openUpgradeInfo({
+    category: c.category,
+    entry: c.entry,
+    level: c.startLevel,
+    max: maxLevel(c.entry, building ? { th: p.village.th } : p.village.gates),
+    gates: p.village.gates,
+    pass: p.settings.pass,
+    planned: r.segments,
+    exportUnix: p.village.timestamp,
+    focusLevel: toLevel,
+  });
+}
 
 /** Coût d'un lancement au prix du Jam. */
 const launchCost = (r: ChainResult, seg: { cost: number }) => costTag(seg.cost, r.chain.entry.resource);
@@ -282,6 +300,8 @@ interface Todo {
   cost?: HTMLElement | null;
   /** Ce qu'on confirme en cochant (heure, potions bues). */
   ask?: ConfirmSpec;
+  /** Ouvre la fiche de l'élément. */
+  info?: { r: ChainResult; toLevel: number };
 }
 
 /**
@@ -331,6 +351,7 @@ function todos(f: Forecast, v: Village): Todo[] {
           key: `L:${r.chain.key}:${s.toLevel}`,
           cost: launchCost(r, s),
           ask: { kind: "launch", label: `${r.chain.category === "heroes" ? heroLabel(r.chain) : displayName(r.chain.entry)} ${s.toLevel - 1} → ${s.toLevel}`, plannedAt: v.timestamp + Math.round(s.start * 3600), exportUnix: v.timestamp },
+          info: { r, toLevel: s.toLevel },
         });
       }
     } else {
@@ -349,6 +370,7 @@ function todos(f: Forecast, v: Village): Todo[] {
         key: `L:${first.r.chain.key}:${first.s.toLevel}`,
         cost: launchCost(first.r, first.s),
         ask: { kind: "launch", label: `${displayName(first.r.chain.entry)} ${first.s.toLevel - 1} → ${first.s.toLevel}`, plannedAt: v.timestamp + Math.round(first.s.start * 3600), exportUnix: v.timestamp },
+        info: { r: first.r, toLevel: first.s.toLevel },
       });
     }
   };
@@ -524,7 +546,14 @@ function summaryTab(p: DashboardProps, f: Forecast): HTMLElement {
               "li",
               { class: `${t.urgent ? "todo-item urgent" : "todo-item"}${t.key && p.checks.has(t.key) ? " is-done" : ""}` },
               t.icon ?? h("span", { class: "todo-dot", "aria-hidden": "true" }),
-              h("div", null, h("p", { class: "todo-text" }, t.text, t.cost ?? null), t.sub ? h("p", { class: "hint" }, t.sub) : null),
+              t.info
+                ? h(
+                    "button",
+                    { type: "button", class: "todo-open", onClick: () => openInfo(p, t.info!.r, t.info!.toLevel), title: "Voir les niveaux à venir" },
+                    h("span", { class: "todo-text" }, t.text, t.cost ?? null),
+                    t.sub ? h("span", { class: "hint" }, t.sub) : null,
+                  )
+                : h("div", null, h("p", { class: "todo-text" }, t.text, t.cost ?? null), t.sub ? h("p", { class: "hint" }, t.sub) : null),
               t.key ? doneBox(p, t.key, t.text, () => li, undefined, t.ask) : null,
             );
             return li;
@@ -826,10 +855,10 @@ function eventRow(p: DashboardProps, e: PlanEvent, exportUnix: number, T: number
     h("span", { class: "ev-time" }, when),
     sprite(r.chain.category, r.chain.entry, r.chain.category === "buildings" || r.chain.category === "traps" ? e.seg.toLevel - 1 : undefined, "sm"),
     h(
-      "div",
-      { class: "ev-main" },
-      h("p", { class: "ev-text" }, `Lance ${nameOf(r)} ${e.seg.toLevel - 1} → ${e.seg.toLevel}`, launchCost(r, e.seg)),
-      h("p", { class: "hint" }, `${POOL_LABEL[e.pool]} · fini le ${fmtDateTime(toDate(exportUnix, e.seg.end))}${e.seg.end > T ? " (après le Jam)" : ""}`),
+      "button",
+      { type: "button", class: "ev-main ev-open", onClick: () => openInfo(p, r, e.seg.toLevel), title: "Voir les niveaux à venir" },
+      h("span", { class: "ev-text" }, `Lance ${nameOf(r)} ${e.seg.toLevel - 1} → ${e.seg.toLevel}`, launchCost(r, e.seg)),
+      h("span", { class: "hint" }, `${POOL_LABEL[e.pool]} · fini le ${fmtDateTime(toDate(exportUnix, e.seg.end))}${e.seg.end > T ? " (après le Jam)" : ""}`),
     ),
     doneBox(p, key, `${nameOf(r)} ${e.seg.toLevel - 1} → ${e.seg.toLevel}`, () => li, onToggle, {
       kind: "launch",
@@ -888,7 +917,12 @@ function waveCard(p: DashboardProps, f: Forecast): HTMLElement {
               "li",
               { class: "brow" },
               sprite(w.result.chain.category, w.result.chain.entry, undefined, "sm"),
-              h("div", { class: "brow-main" }, h("p", { class: "brow-name" }, `${nameOf(w.result)} ${w.seg.toLevel - 1} → ${w.seg.toLevel}`), h("p", { class: "hint" }, `Lancé le ${fmtDateTime(toDate(v.timestamp, w.seg.start))}`)),
+              h(
+                "button",
+                { type: "button", class: "brow-main brow-open", onClick: () => openInfo(p, w.result, w.seg.toLevel), title: "Voir les niveaux à venir" },
+                h("span", { class: "brow-name" }, `${nameOf(w.result)} ${w.seg.toLevel - 1} → ${w.seg.toLevel}`),
+                h("span", { class: "hint" }, `Lancé le ${fmtDateTime(toDate(v.timestamp, w.seg.start))}`),
+              ),
               h("span", { class: "pill" }, `−${fmtDays(w.savedHours)} j`),
             ),
           ),
