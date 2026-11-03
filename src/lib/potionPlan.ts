@@ -100,6 +100,8 @@ export function planPotions(opts: {
   maxStock: number;
   sleep: Sleep | null;
   defaultHour?: number;
+  /** Jours confirmés par le joueur (jour de Paris → début en h, nombre bu) : ils remplacent le prévu. */
+  confirmed?: ReadonlyMap<string, { start: number; count: number }>;
 }): PotionPlan {
   const { exportUnix, endH, sleep, maxStock } = opts;
   const owned = Math.min(Math.max(0, Math.floor(opts.owned)), maxStock);
@@ -133,11 +135,25 @@ export function planPotions(opts: {
   });
   const counts = spread(total, slots.map((s) => s.length));
 
+  // Jours confirmés : ce qui a été bu, d'affilée, à l'heure dite. Les jours d'avant sans confirmation
+  // restent comme prévus ; le reste des potions se répartit sur les jours d'après.
+  const confirmed = opts.confirmed ?? new Map();
+  const lastConfirmed = Math.max(-1, ...usable.map((d, i) => (confirmed.has(d.day) ? i : -1)));
+  const chosen: number[][] = usable.map((d, i) => {
+    if (i > lastConfirmed) return [];
+    const c = confirmed.get(d.day);
+    if (!c) return slots[i].slice(0, counts[i]);
+    return Array.from({ length: c.count }, (_, k) => c.start + k).filter((t) => t + 1 <= endH);
+  });
+  const used = chosen.reduce((n, x) => n + x.length, 0);
+  const later = spread(Math.max(0, total - used), slots.slice(lastConfirmed + 1).map((x) => x.length));
+  later.forEach((n, k) => (chosen[lastConfirmed + 1 + k] = slots[lastConfirmed + 1 + k].slice(0, n)));
+
   const result: DayPlan[] = [];
   const starts: number[] = [];
   let stock = owned;
   usable.forEach((d, i) => {
-    const dayStarts = slots[i].slice(0, counts[i]);
+    const dayStarts = chosen[i];
     const bought = Math.max(0, dayStarts.length - stock);
     stock = stock + bought - dayStarts.length;
     starts.push(...dayStarts);

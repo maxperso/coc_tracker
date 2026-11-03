@@ -3,6 +3,7 @@ import { displayName, findByName, gameIndex, maxLevel, type Entry } from "../lib
 import type { PlayerRow } from "../lib/api";
 import type { Snapshot } from "../lib/history";
 import { overlaps } from "../lib/cwl";
+import type { Fact, Facts } from "../lib/facts";
 import { builderForecast, FOCUS_LABEL, forecast, heroLabel, wallSummary, type Focus, type Forecast, type PoolForecast, type Settings, type UpgradeOrder } from "../lib/plan";
 import { globalPct, pct, progress, progressCurve } from "../lib/progress";
 import type { Purchase } from "../lib/recommend";
@@ -21,6 +22,7 @@ import { sleepLabel } from "./sleep";
 import { playersView } from "./players";
 import { icon, type IconName } from "./icons";
 import { backlogView, type BacklogActions, type BacklogState } from "./backlog";
+import { confirmAction, type ConfirmSpec } from "./confirmAction";
 import { orderEditor } from "./order";
 import { progressionView } from "./progression";
 import { costTag, res } from "./resources";
@@ -96,7 +98,9 @@ export interface DashboardProps {
   demo?: boolean;
   /** Actions du plan cochées « fait ». `onCheck` absent : lecture seule. */
   checks: ReadonlySet<string>;
-  onCheck?: (key: string, done: boolean) => void;
+  onCheck?: (key: string, done: boolean, fact?: Fact) => void;
+  /** Heures réelles et potions bues confirmées en cochant : le plan en tient compte. */
+  facts: Facts;
   push: PushState | "loading";
   onPush: (enable: boolean) => void;
   onPushTest: () => void;
@@ -276,13 +280,16 @@ interface Todo {
   key?: string;
   /** Prix du lancement (icône de ressource et montant). */
   cost?: HTMLElement | null;
+  /** Ce qu'on confirme en cochant (heure, potions bues). */
+  ask?: ConfirmSpec;
 }
 
 /**
- * Case ronde « fait ». Cocher ne redessine pas la page : la ligne change d'aspect sur place
- * et `onToggle` prévient les compteurs voisins.
+ * Case ronde « fait ». On coche au moment où l'on lance : avec `ask`, une fenêtre confirme l'heure
+ * (et les potions bues), puis le plan se recalcule. Sans `ask` (attaque de LDC), la ligne change
+ * d'aspect sur place et `onToggle` prévient les compteurs voisins.
  */
-function doneBox(p: DashboardProps, key: string, label: string, row: () => HTMLElement | null, onToggle?: () => void): HTMLElement {
+function doneBox(p: DashboardProps, key: string, label: string, row: () => HTMLElement | null, onToggle?: () => void, ask?: ConfirmSpec): HTMLElement {
   const box = h("input", {
     type: "checkbox",
     class: "checkbox done-box",
@@ -292,6 +299,12 @@ function doneBox(p: DashboardProps, key: string, label: string, row: () => HTMLE
     title: p.onCheck ? "Marquer comme fait" : undefined,
   });
   box.addEventListener("change", () => {
+    if (box.checked && ask) {
+      // Rien n'est coché tant que l'heure n'est pas confirmée.
+      box.checked = false;
+      confirmAction(ask, (fact) => p.onCheck?.(key, true, fact));
+      return;
+    }
     p.onCheck?.(key, box.checked);
     row()?.classList.toggle("is-done", box.checked);
     box.classList.toggle("pop", box.checked);
@@ -317,6 +330,7 @@ function todos(f: Forecast, v: Village): Todo[] {
           urgent: true,
           key: `L:${r.chain.key}:${s.toLevel}`,
           cost: launchCost(r, s),
+          ask: { kind: "launch", label: `${r.chain.category === "heroes" ? heroLabel(r.chain) : displayName(r.chain.entry)} ${s.toLevel - 1} → ${s.toLevel}`, plannedAt: v.timestamp + Math.round(s.start * 3600), exportUnix: v.timestamp },
         });
       }
     } else {
@@ -334,6 +348,7 @@ function todos(f: Forecast, v: Village): Todo[] {
         urgent: true,
         key: `L:${first.r.chain.key}:${first.s.toLevel}`,
         cost: launchCost(first.r, first.s),
+        ask: { kind: "launch", label: `${displayName(first.r.chain.entry)} ${first.s.toLevel - 1} → ${first.s.toLevel}`, plannedAt: v.timestamp + Math.round(first.s.start * 3600), exportUnix: v.timestamp },
       });
     }
   };
@@ -346,6 +361,7 @@ function todos(f: Forecast, v: Village): Todo[] {
       text: `Bois ${today.starts.length} potion${today.starts.length > 1 ? "s" : ""} d'ouvrier dès ${fmtHour(toDate(v.timestamp, today.starts[0]))}`,
       sub: today.bought ? `${today.bought} à acheter avec tes médailles` : "Avec ton stock",
       key: `P:builder:${today.day}`,
+      ask: { kind: "potion", label: "Potions d'ouvrier", plannedAt: v.timestamp + Math.round(today.starts[0] * 3600), count: today.starts.length, exportUnix: v.timestamp },
     });
   }
   return out;
@@ -509,7 +525,7 @@ function summaryTab(p: DashboardProps, f: Forecast): HTMLElement {
               { class: `${t.urgent ? "todo-item urgent" : "todo-item"}${t.key && p.checks.has(t.key) ? " is-done" : ""}` },
               t.icon ?? h("span", { class: "todo-dot", "aria-hidden": "true" }),
               h("div", null, h("p", { class: "todo-text" }, t.text, t.cost ?? null), t.sub ? h("p", { class: "hint" }, t.sub) : null),
-              t.key ? doneBox(p, t.key, t.text, () => li) : null,
+              t.key ? doneBox(p, t.key, t.text, () => li, undefined, t.ask) : null,
             );
             return li;
           }),
@@ -776,7 +792,13 @@ function eventRow(p: DashboardProps, e: PlanEvent, exportUnix: number, T: number
       h("span", { class: "ev-time" }, when),
       h("img", { class: "sprite sprite-sm", src: `sprites/magic_items/${POTION_SPRITE[e.pool]}.webp`, alt: "" }),
       h("div", { class: "ev-main" }, h("p", { class: "ev-text" }, `Bois ${e.count} potion${e.count > 1 ? "s" : ""} ${POTION_LABEL[e.pool]}`), e.buy ? h("p", { class: "hint" }, `Achète-en ${e.buy} juste avant`) : null),
-      doneBox(p, key, `potions ${POTION_LABEL[e.pool]}`, () => li, onToggle),
+      doneBox(p, key, `potions ${POTION_LABEL[e.pool]}`, () => li, onToggle, {
+        kind: "potion",
+        label: `Potions ${POTION_LABEL[e.pool]}`,
+        plannedAt: exportUnix + Math.round(e.t * 3600),
+        count: e.count,
+        exportUnix,
+      }),
     );
     return li;
   }
@@ -809,7 +831,12 @@ function eventRow(p: DashboardProps, e: PlanEvent, exportUnix: number, T: number
       h("p", { class: "ev-text" }, `Lance ${nameOf(r)} ${e.seg.toLevel - 1} → ${e.seg.toLevel}`, launchCost(r, e.seg)),
       h("p", { class: "hint" }, `${POOL_LABEL[e.pool]} · fini le ${fmtDateTime(toDate(exportUnix, e.seg.end))}${e.seg.end > T ? " (après le Jam)" : ""}`),
     ),
-    doneBox(p, key, `${nameOf(r)} ${e.seg.toLevel - 1} → ${e.seg.toLevel}`, () => li, onToggle),
+    doneBox(p, key, `${nameOf(r)} ${e.seg.toLevel - 1} → ${e.seg.toLevel}`, () => li, onToggle, {
+      kind: "launch",
+      label: `${nameOf(r)} ${e.seg.toLevel - 1} → ${e.seg.toLevel}`,
+      plannedAt: exportUnix + Math.round(e.t * 3600),
+      exportUnix,
+    }),
   );
   return li;
 }
@@ -926,7 +953,7 @@ function planTab(p: DashboardProps, f: Forecast): HTMLElement {
     exportAgeNotice(p),
     h("div", { class: "dash-grid" }, rulesCard(p, f), purchaseCard(p)),
     h("h2", { class: "section-title" }, "Calendrier des relances"),
-    h("p", { class: "hint" }, p.onCheck ? "Coche chaque action une fois faite. Les heures restent celles de ton export : recolle-le si tu prends du retard." : "Les actions cochées sont celles que ce joueur a déjà faites."),
+    h("p", { class: "hint" }, p.onCheck ? "Coche au moment où tu lances ou bois : tu confirmes l'heure (et combien de potions), et la suite du plan se recale dessus." : "Les actions cochées sont celles que ce joueur a déjà faites."),
     calendar(p, f, p.village.timestamp),
     waveCard(p, f),
   );
@@ -1431,7 +1458,7 @@ export function friendsSection(players: HTMLElement): HTMLElement {
 
 export function dashboardView(p: DashboardProps): HTMLElement {
   const v = p.village;
-  const f = forecast(v, p.settings);
+  const f = forecast(v, p.settings, undefined, p.facts);
   const T = hoursBetween(v.timestamp, JAM.end);
   const body =
     T <= 0 ? summaryTab(p, f)

@@ -1,4 +1,5 @@
 import type { BacklogItem } from "./backlog";
+import type { Fact } from "./facts";
 import type { Settings } from "./plan";
 import type { PlayerSummary } from "./summary";
 
@@ -38,6 +39,8 @@ export interface PlanChecks {
   /** Secondes Unix de l'export auquel se rapportent les coches. */
   exportAt: number;
   keys: string[];
+  /** Heure réelle (et potions bues) confirmée en cochant, par action. */
+  facts?: Record<string, Fact>;
 }
 
 export interface PushConfigResponse {

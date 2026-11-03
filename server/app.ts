@@ -20,6 +20,7 @@ import {
   type SessionUser,
 } from "./auth";
 import { MAX_CHECK_KEY, MAX_CHECKS } from "../src/lib/reminders";
+import { MAX_POTIONS_FACT } from "../src/lib/facts";
 import { LATEST_RELEASE } from "../src/lib/changelog";
 import { registerBacklog, registerWhatsNew } from "./backlog";
 import { consumeCode, createCode, sentRecently } from "./codes";
@@ -46,7 +47,14 @@ const Resend = z.object({ username: z.string().max(40) });
 const Forgot = z.object({ email: Email });
 const Reset = z.object({ email: Email, code: Code, password: Password });
 const ExportBody = z.object({ text: z.string().max(MAX_EXPORT_CHARS) });
-const Checks = z.object({ exportAt: z.number().int().positive(), keys: z.array(z.string().min(1).max(MAX_CHECK_KEY)).max(MAX_CHECKS) });
+const Checks = z.object({
+  exportAt: z.number().int().positive(),
+  keys: z.array(z.string().min(1).max(MAX_CHECK_KEY)).max(MAX_CHECKS),
+  facts: z
+    .record(z.string().min(1).max(MAX_CHECK_KEY), z.object({ at: z.number().int().positive(), count: z.number().int().min(0).max(MAX_POTIONS_FACT).optional() }))
+    .refine((f) => Object.keys(f).length <= MAX_CHECKS, "Trop d'actions confirmées.")
+    .optional(),
+});
 const Subscription = z.object({
   endpoint: z.string().max(2000),
   keys: z.object({ p256dh: z.string().min(10).max(200), auth: z.string().min(8).max(100) }),
@@ -442,8 +450,10 @@ export async function buildApp(cfg: Config, db: Db, mailer: Mailer, push: PushSe
   app.put("/api/me/checks", { preHandler: requireUser }, async (req, reply) => {
     const body = Checks.safeParse(req.body);
     if (!body.success) return bad(reply, body.error);
-    const value = { exportAt: body.data.exportAt, keys: [...new Set(body.data.keys)] };
+    const value = { exportAt: body.data.exportAt, keys: [...new Set(body.data.keys)], facts: body.data.facts ?? {} };
     await db.query("update users set plan_checks = $2 where id = $1", [req.user!.id, value]);
+    // Heures réelles confirmées : les rappels suivants se recalent dessus.
+    if (Object.keys(value.facts).length) refreshReminders(req.user!.id);
     return value;
   });
 

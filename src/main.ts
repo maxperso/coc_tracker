@@ -6,6 +6,7 @@ import "./styles.css";
 
 import type { MeResponse, PlanChecks, PlayerProfile, PlayerRow } from "./lib/api";
 import type { BacklogItem, BacklogTicket } from "./lib/backlog";
+import type { Fact } from "./lib/facts";
 import { createSaver } from "./lib/saver";
 import { LATEST_RELEASE, unseenReleases } from "./lib/changelog";
 import { whatsNewDialog } from "./ui/whatsNew";
@@ -38,6 +39,8 @@ interface Loaded {
   history: Snapshot[];
   /** Actions du plan cochées « fait » pour cet export. */
   checks: Set<string>;
+  /** Heures réelles et potions bues confirmées en cochant : le plan repart de là. */
+  facts: Record<string, Fact>;
 }
 
 const state: {
@@ -121,8 +124,8 @@ function loadProfile(p: PlayerProfile): Loaded | null {
   const village = villages.at(-1);
   if (!village) return null;
   // Les coches ne valent que pour l'export auquel elles se rapportent.
-  const checks = new Set(p.checks && p.checks.exportAt === village.timestamp ? p.checks.keys : []);
-  return { village, history: villages.map(snapshotOf), checks };
+  const current = p.checks && p.checks.exportAt === village.timestamp ? p.checks : null;
+  return { village, history: villages.map(snapshotOf), checks: new Set(current?.keys ?? []), facts: { ...(current?.facts ?? {}) } };
 }
 
 /** Session expirée : retour à l'écran de connexion. */
@@ -194,7 +197,7 @@ function openDemo() {
   const r = parseExport(JSON.stringify(demoExport));
   if (!r.ok) return;
   const village = buildVillage(r.value, gameIndex());
-  state.friend = { village, history: [snapshotOf(village)], checks: new Set(), username: "Démo", settings: { ...structuredClone(DEFAULT_SETTINGS), focus: "hybrid" }, demo: true };
+  state.friend = { village, history: [snapshotOf(village)], checks: new Set(), facts: {}, username: "Démo", settings: { ...structuredClone(DEFAULT_SETTINGS), focus: "hybrid" }, demo: true };
   state.friendTab = "summary";
   state.view = "profile";
   render();
@@ -427,12 +430,17 @@ const checksSaver = createSaver<PlanChecks>({
   onError: saveFailed("Coches pas encore enregistrées"),
 });
 
-function toggleCheck(key: string, done: boolean) {
+function toggleCheck(key: string, done: boolean, fact?: Fact) {
   const mine = state.mine;
   if (!mine) return;
+  // Une heure confirmée (ou retirée) change le plan : on le recalcule.
+  const replan = !!fact || key in mine.facts;
   if (done) mine.checks.add(key);
   else mine.checks.delete(key);
-  checksSaver.save({ exportAt: mine.village.timestamp, keys: [...mine.checks] });
+  if (done && fact) mine.facts[key] = fact;
+  else delete mine.facts[key];
+  checksSaver.save({ exportAt: mine.village.timestamp, keys: [...mine.checks], facts: { ...mine.facts } });
+  if (replan) render();
 }
 
 // Sur téléphone, on coche puis on repart aussitôt dans le jeu : tout part avant la mise en pause de l'app.
@@ -843,6 +851,7 @@ function renderView(): void {
     theme,
     onTheme: setTheme,
     checks: loaded.checks,
+    facts: loaded.facts,
     onCheck: friend ? undefined : toggleCheck,
     push,
     onPush: (enable) => void togglePush(enable),

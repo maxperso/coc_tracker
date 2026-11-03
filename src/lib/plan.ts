@@ -1,5 +1,6 @@
 import { isPermanentBuilding, priorityRank } from "./buildings";
 import { DEFAULT_CWL, cwlBlackout, type Blackout, type Cwl } from "./cwl";
+import { launchFacts, potionFacts, type Facts } from "./facts";
 import { HERO_SHORT, maxLevel, stepCost, type Gates } from "./gamedata";
 import type { ResolvedItem } from "./exportParse";
 import { planPotions, prunePlan, type PotionPlan, type Sleep } from "./potionPlan";
@@ -169,8 +170,12 @@ function runPool(
   hammers: number[] = [],
   cfg: JamConfig = JAM,
   blackout?: Blackout,
+  /** Ce que le joueur a confirmé en cochant : lancements à leur heure, potions bues ce jour-là. */
+  pool?: { name: "builder" | "lab" | "pet"; facts: Facts },
 ): PoolForecast {
   const tHours = hoursBetween(v.timestamp, cfg.end);
+  const confirmed = pool ? potionFacts(pool.facts, pool.name, v.timestamp) : undefined;
+  const forced = pool ? launchFacts(pool.facts, v.timestamp) : undefined;
   const plan = planPotions({
     exportUnix: v.timestamp,
     endH: tHours,
@@ -178,13 +183,17 @@ function runPool(
     purchases: potions.purchases,
     maxStock: cfg.potions.maxStock,
     sleep: s.sleep,
+    confirmed,
   });
   const run = (starts: number[]) =>
-    simulate({ exportUnix: v.timestamp, jamEndH: tHours, slots, clock: new WorkClock(starts, extraHours), chains, pass: s.pass, policy, sleep: s.sleep, hammers, cfg, blackout });
+    simulate({ exportUnix: v.timestamp, jamEndH: tHours, slots, clock: new WorkClock(starts, extraHours), chains, pass: s.pass, policy, sleep: s.sleep, hammers, cfg, blackout, forced });
   let sim = run(plan.starts);
   // Une potion n'agit que sur les chantiers actifs : on retire celles qui tombent à vide.
+  // Celles que le joueur a déclaré avoir bues restent : c'est ce qui s'est passé.
+  const drunk = new Set([...(confirmed?.values() ?? [])].flatMap((c) => Array.from({ length: c.count }, (_, k) => c.start + k)));
   const clock = new WorkClock(plan.starts, extraHours);
   const useful = (start: number) => {
+    if (drunk.has(start)) return true;
     const win = clock.potionWindows.find((w) => w.start >= start - 1e-9);
     const [a, b] = win ? [win.start, win.end] : [start, start + 1];
     return sim.results.some((r) => r.segments.some((g) => g.start < b && g.end > a));
@@ -290,7 +299,7 @@ const ordered = (v: Village, s: Settings, pool: OrderPool, chains: Chain[]) =>
 export type BuilderForecast = Pick<Forecast, "heroes" | "buildings" | "builderSlots" | "busyAtExport" | "cwl">;
 
 /** Pool des ouvriers seul : sert aux recherches rapides (recommandation d'achats). */
-export function builderForecast(v: Village, s: Settings, cfg: JamConfig = JAM): BuilderForecast {
+export function builderForecast(v: Village, s: Settings, cfg: JamConfig = JAM, facts: Facts = NO_FACTS): BuilderForecast {
   const { heroes, buildings, other } = builderChains(v, s);
   const builderSlots = s.builders + (s.goblinBuilder ? 1 : 0);
   const tHours = hoursBetween(v.timestamp, cfg.end);
@@ -299,6 +308,7 @@ export function builderForecast(v: Village, s: Settings, cfg: JamConfig = JAM): 
     v, s, [...heroes, ...buildings, ...other], builderSlots, s.potions.builder, cfg.potions.builder.extraHours, "mostRemaining",
     s.focus === "buildings" ? [] : hammerTimes(s.heroHammers, tHours, cfg), cfg,
     cwl ?? undefined,
+    { name: "builder", facts },
   );
   const subset = (chains: Chain[]): PoolForecast => {
     const results = pool.results.filter((r) => chains.includes(r.chain));
@@ -315,17 +325,20 @@ export function builderForecast(v: Village, s: Settings, cfg: JamConfig = JAM): 
 }
 
 /** Labo, ordre « plus courtes d'abord » (le plus de niveaux) ou « plus longues d'abord ». */
-export function labForecast(v: Village, s: Settings, policy: Policy = "shortest", cfg: JamConfig = JAM): PoolForecast {
+export function labForecast(v: Village, s: Settings, policy: Policy = "shortest", cfg: JamConfig = JAM, facts: Facts = NO_FACTS): PoolForecast {
   const labSlots = 1 + (s.goblinResearcher ? 1 : 0);
-  return runPool(v, s, ordered(v, s, "lab", labChains(v)), labSlots, s.potions.research, cfg.potions.research.extraHours, policy, [], cfg);
+  return runPool(v, s, ordered(v, s, "lab", labChains(v)), labSlots, s.potions.research, cfg.potions.research.extraHours, policy, [], cfg, undefined, { name: "lab", facts });
 }
 
-export function forecast(v: Village, s: Settings, cfg: JamConfig = JAM): Forecast {
+const NO_FACTS: Facts = {};
+
+/** Plan complet. `facts` : ce que le joueur a confirmé en cochant (heures réelles, potions bues). */
+export function forecast(v: Village, s: Settings, cfg: JamConfig = JAM, facts: Facts = NO_FACTS): Forecast {
   return {
-    ...builderForecast(v, s, cfg),
-    labBest: labForecast(v, s, "shortest", cfg),
-    labWorst: labForecast(v, s, "longest", cfg),
-    pets: runPool(v, s, ordered(v, s, "pet", petChains(v)), 1, s.potions.pet, cfg.potions.pet.extraHours, "shortest", [], cfg),
+    ...builderForecast(v, s, cfg, facts),
+    labBest: labForecast(v, s, "shortest", cfg, facts),
+    labWorst: labForecast(v, s, "longest", cfg, facts),
+    pets: runPool(v, s, ordered(v, s, "pet", petChains(v)), 1, s.potions.pet, cfg.potions.pet.extraHours, "shortest", [], cfg, undefined, { name: "pet", facts }),
   };
 }
 

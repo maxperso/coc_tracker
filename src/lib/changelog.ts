@@ -19,6 +19,13 @@ export interface Release {
 
 export const CHANGELOG: Release[] = [
   {
+    id: 9,
+    date: "2026-11-03",
+    changes: [
+      { kind: "feature", text: "Coche une action au moment où tu la fais : tu confirmes l'heure (et combien de potions tu as bues), et la suite du plan se recale sur ce que tu as vraiment fait. Les potions non bues sont reportées sur les jours suivants." },
+    ],
+  },
+  {
     id: 8,
     date: "2026-11-03",
     changes: [

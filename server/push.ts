@@ -1,4 +1,5 @@
 import webpush from "web-push";
+import type { Facts } from "../src/lib/facts";
 import { forecast } from "../src/lib/plan";
 import { effectiveSettings } from "../src/lib/recommend";
 import { exportReminder, planReminders, type Reminder } from "../src/lib/reminders";
@@ -85,15 +86,17 @@ export async function rebuildQueue(db: Db, userId: number, now = Date.now() / 10
   const { rows: subs } = await db.query("select 1 from push_subscriptions where user_id = $1 limit 1", [userId]);
   await db.query("delete from push_queue where user_id = $1 and sent_at is null", [userId]);
   if (!subs.length) return 0;
-  const { rows } = await db.query<{ raw: unknown; settings: unknown }>(
-    `select e.raw, u.settings from exports e join users u on u.id = e.user_id
+  const { rows } = await db.query<{ raw: unknown; settings: unknown; checks: { exportAt?: number; facts?: Facts } | null }>(
+    `select e.raw, u.settings, u.plan_checks as checks from exports e join users u on u.id = e.user_id
      where e.user_id = $1 order by e.exported_at desc limit 1`,
     [userId],
   );
   if (!rows[0]) return 0;
   const village = villageFromText(JSON.stringify(rows[0].raw));
   const settings = effectiveSettings(village, parseSettings(rows[0].settings)).settings;
-  const reminders: Reminder[] = planReminders(forecast(village, settings), village.timestamp, now);
+  // Heures réelles confirmées en cochant, si elles portent sur cet export.
+  const facts = rows[0].checks?.exportAt === village.timestamp ? (rows[0].checks.facts ?? {}) : {};
+  const reminders: Reminder[] = planReminders(forecast(village, settings, undefined, facts), village.timestamp, now);
   const exp = exportReminder(village.timestamp, settings.sleep, Date.parse(JAM.end) / 1000);
   if (exp && exp.at > now) reminders.push(exp);
   if (!reminders.length) return 0;

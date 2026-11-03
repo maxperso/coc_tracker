@@ -278,9 +278,18 @@ describe.skipIf(!url)("API", () => {
       const bad = await req({ method: "PUT", url: "/api/me/checks", cookie: dan, payload: { exportAt: 1, keys: ["x".repeat(500)] } });
       expect(bad.statusCode).toBe(400);
       const ok = await req({ method: "PUT", url: "/api/me/checks", cookie: dan, payload: { exportAt: 1793617920, keys: ["L:a:2", "L:a:2", "P:builder:2026-11-02"] } });
-      expect(ok.json()).toEqual({ exportAt: 1793617920, keys: ["L:a:2", "P:builder:2026-11-02"] });
+      expect(ok.json()).toEqual({ exportAt: 1793617920, keys: ["L:a:2", "P:builder:2026-11-02"], facts: {} });
       const erin = await signup("erin", "erin@example.test");
       expect((await req({ url: "/api/players/dan", cookie: erin })).json().checks.keys).toHaveLength(2);
+    });
+
+    it("garde l'heure réelle et les potions bues confirmées en cochant", async () => {
+      const facts = { "L:a:2": { at: 1793620000 }, "P:builder:2026-11-02": { at: 1793621000, count: 4 } };
+      const ok = await req({ method: "PUT", url: "/api/me/checks", cookie: dan, payload: { exportAt: 1793617920, keys: Object.keys(facts), facts } });
+      expect(ok.json().facts).toEqual(facts);
+      expect((await req({ url: "/api/players/dan", cookie: dan })).json().checks.facts).toEqual(facts);
+      const tooMany = { "P:builder:2026-11-02": { at: 1793621000, count: 999 } };
+      expect((await req({ method: "PUT", url: "/api/me/checks", cookie: dan, payload: { exportAt: 1793617920, keys: [], facts: tooMany } })).statusCode).toBe(400);
     });
 
     it("n'accepte que les services push connus", async () => {

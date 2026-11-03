@@ -61,6 +61,8 @@ export interface SimInput {
   hammers?: number[];
   /** Chaînes jamais en chantier pendant certaines fenêtres (héros de LDC à l'heure d'attaque). */
   blackout?: Blackout;
+  /** Lancements confirmés par le joueur : « clé de chaîne:niveau » → heures depuis l'export. */
+  forced?: ReadonlyMap<string, number>;
   cfg?: JamConfig;
 }
 
@@ -129,8 +131,18 @@ export function simulate(input: SimInput): SimResult {
     [t, ...windows.map((w) => w.end).filter((e) => e > t)].find((x) => fits(ci, x)) ?? Infinity;
   const prio = (ci: number) => chains[ci].priority ?? 0;
 
+  const forced = input.forced ?? new Map<string, number>();
+  /** Heure confirmée du prochain niveau d'une chaîne, s'il y en a une. */
+  const forcedAt = (ci: number) => {
+    const step = chains[ci].steps[next[ci]];
+    return step ? forced.get(`${chains[ci].key}:${step.toLevel}`) : undefined;
+  };
+
   function candidates(t: number): number[] {
-    const idle = chains.map((_, ci) => ci).filter((ci) => !busy(ci) && next[ci] < chains[ci].steps.length);
+    // Un niveau dont le lancement est confirmé à une heure plus tardive attend cette heure.
+    const idle = chains
+      .map((_, ci) => ci)
+      .filter((ci) => !busy(ci) && next[ci] < chains[ci].steps.length && !((forcedAt(ci) ?? -Infinity) > t + EPS));
     const ready = idle.filter((ci) => fits(ci, t));
     // Les héros gardés qui attendent la fin d'une attaque gardent leur ouvrier : une chaîne moins
     // prioritaire ne le prend que si elle a fini avant qu'ils puissent repartir.
@@ -177,6 +189,19 @@ export function simulate(input: SimInput): SimResult {
 
   let t = 0;
   for (let guard = 0; guard < 100_000; guard++) {
+    // Lancements confirmés : à leur heure, même la nuit. Le niveau d'avant est alors forcément fini,
+    // même si le plan le croyait encore en cours (potions bues autrement, marteau…).
+    for (let ci = 0; ci < chains.length; ci++) {
+      const f = forcedAt(ci);
+      if (f === undefined || f > t + EPS) continue;
+      const running = active.findIndex((a) => a.ci === ci);
+      if (running >= 0) {
+        active[running].seg.end = Math.min(active[running].seg.end, t);
+        active.splice(running, 1);
+      }
+      launch(ci, t);
+    }
+
     // Lancements : seulement avant la fin du Jam et quand le joueur est réveillé.
     let wake: number | undefined;
     if (t < jamEndH - EPS) {
@@ -197,7 +222,8 @@ export function simulate(input: SimInput): SimResult {
     const nextHammer = hammers.length ? hammers[0] : Infinity;
     // Fin d'une attaque : un héros gardé peut repartir en chantier.
     const nextFree = Math.min(...windows.map((w) => w.end).filter((e) => e > t + EPS));
-    const nextT = Math.min(nextEnd, nextHammer, wake ?? Infinity, nextFree);
+    const nextForced = Math.min(...chains.map((_, ci) => forcedAt(ci) ?? Infinity).filter((f) => f > t + EPS));
+    const nextT = Math.min(nextEnd, nextHammer, wake ?? Infinity, nextFree, nextForced);
     if (!Number.isFinite(nextT) || nextT >= jamEndH - EPS) break;
     t = Math.max(t, nextT);
 
