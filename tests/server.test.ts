@@ -541,7 +541,7 @@ describe.skipIf(!url)("API", () => {
   });
 
   describe("complétion du jeu entier", () => {
-    it("recalcule les anciens résumés et classe par HDV, puis par complétion de l'HDV", async () => {
+    it("recalcule les anciens résumés et classe par HDV, puis par complétion du jeu", async () => {
       const alice = cookieOf(await post("/api/auth/login", { username: "alice", password: "motdepasse1" }));
       // Résumé d'avant : sans le chiffre du jeu entier.
       await db.query("update exports set summary = summary #- '{pct,game}'");
@@ -552,10 +552,10 @@ describe.skipIf(!url)("API", () => {
       // Un HDV plus bas reste derrière, même plus complet pour son HDV.
       const { rows: e } = await db.query<{ id: string }>("select e.id from exports e join users u on u.id = e.user_id where lower(u.username) = 'dev' limit 1");
       if (e[0]) await db.query("update exports set summary = jsonb_set(jsonb_set(summary, '{th}', '17'), '{pct,global}', '0.99') where id = $1", [e[0].id]);
-      const ranked = (await req({ url: "/api/players", cookie: alice })).json() as { summary: { th: number; pct: { global: number } } }[];
+      const ranked = (await req({ url: "/api/players", cookie: alice })).json() as { summary: { th: number; pct: { game: number } } }[];
       for (let i = 1; i < ranked.length; i++) {
         const [a, b] = [ranked[i - 1].summary, ranked[i].summary];
-        expect(a.th > b.th || (a.th === b.th && a.pct.global >= b.pct.global)).toBe(true);
+        expect(a.th > b.th || (a.th === b.th && a.pct.game >= b.pct.game)).toBe(true);
       }
       if (e[0]) expect(ranked.at(-1)!.summary.th).toBe(17);
     });

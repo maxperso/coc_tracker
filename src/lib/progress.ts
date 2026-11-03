@@ -121,39 +121,52 @@ export function globalPct(cats: CategoryProgress[]): number {
 export interface CurvePoint {
   /** Heures depuis l'export. */
   t: number;
+  /** Complétion de l'HDV. */
   global: number;
+  /** Complétion du jeu entier. */
+  game: number;
   heroes: number;
   buildings: number;
+  lab: number;
 }
 
 function gainedAt(results: ChainResult[], t: number): number {
   return results.reduce((n, r) => n + Math.max(0, levelAt(r, t) - r.chain.startLevel), 0);
 }
 
+const sourcesOf = (f: Forecast): Partial<Record<CategoryKey, ChainResult[]>> => ({
+  heroes: f.heroes.results,
+  buildings: f.buildings.results,
+  lab: f.labBest.results,
+  pets: f.pets.results,
+});
+
+/** Catégories telles qu'elles seront `t` heures après l'export, chantiers terminés compris. */
+export function progressAt(cats: CategoryProgress[], f: Forecast, t: number): CategoryProgress[] {
+  const sources = sourcesOf(f);
+  return cats.map((c) => {
+    const src = sources[c.key];
+    const gained = src ? gainedAt(src, t) : 0;
+    return { ...c, current: Math.min(c.max, c.current + gained), remaining: Math.max(0, c.remaining - gained) };
+  });
+}
+
 /** Courbe prévue de l'avancement, d'après les chantiers simulés. */
 export function progressCurve(v: Village, f: Forecast, step = 6): CurvePoint[] {
   const cats = progress(v);
-  const sources: Partial<Record<CategoryKey, ChainResult[]>> = {
-    heroes: f.heroes.results,
-    buildings: f.buildings.results,
-    lab: f.labBest.results,
-    pets: f.pets.results,
-  };
+  const game = progress(v, "game");
   const lastEnd = Math.max(
     f.heroes.tHours,
-    ...Object.values(sources).flatMap((rs) => rs!.flatMap((r) => r.segments.map((s) => s.end))),
+    ...Object.values(sourcesOf(f)).flatMap((rs) => rs!.flatMap((r) => r.segments.map((s) => s.end))),
   );
   const end = Math.min(lastEnd, f.heroes.tHours + 7 * 24);
-  const at = (t: number) => {
-    const shifted = cats.map((c) => {
-      const src = sources[c.key];
-      return { ...c, current: Math.min(c.max, c.current + (src ? gainedAt(src, t) : 0)) };
-    });
+  const at = (t: number): CurvePoint => {
+    const shifted = progressAt(cats, f, t);
     const by = (k: CategoryKey) => {
       const c = shifted.find((x) => x.key === k);
       return c ? pct(c) : NaN;
     };
-    return { t, global: globalPct(shifted), heroes: by("heroes"), buildings: by("buildings") };
+    return { t, global: globalPct(shifted), game: globalPct(progressAt(game, f, t)), heroes: by("heroes"), buildings: by("buildings"), lab: by("lab") };
   };
   const points: CurvePoint[] = [];
   for (let t = 0; t < end; t += step) points.push(at(t));

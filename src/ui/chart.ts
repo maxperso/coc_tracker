@@ -11,15 +11,16 @@ function s<K extends keyof SVGElementTagNameMap>(tag: K, attrs: Record<string, s
 }
 
 export interface Series {
-  key: "global" | "heroes" | "buildings";
+  key: "global" | "heroes" | "buildings" | "lab";
   label: string;
   cssVar: string;
 }
 
 export const SERIES: Series[] = [
-  { key: "global", label: "Village", cssVar: "--series-1" },
+  { key: "global", label: "HDV", cssVar: "--series-1" },
   { key: "heroes", label: "Héros", cssVar: "--series-2" },
   { key: "buildings", label: "Bâtiments", cssVar: "--series-3" },
+  { key: "lab", label: "Labo", cssVar: "--series-4" },
 ];
 
 export interface HistoryDot {
@@ -47,7 +48,7 @@ export function progressChart(points: CurvePoint[], history: HistoryDot[], expor
     const m = { top: 12, right: W < 480 ? 56 : 108, bottom: 28, left: 40 };
     const x0 = Math.min(0, ...history.map((d) => d.t));
     const x1 = points[points.length - 1].t;
-    const values = points.flatMap((p) => [p.global, p.heroes, p.buildings]).concat(history.map((d) => d.global)).filter(Number.isFinite);
+    const values = points.flatMap((p) => SERIES.map((x) => p[x.key])).concat(history.map((d) => d.global)).filter(Number.isFinite);
     const y0 = Math.max(0, Math.floor(Math.min(...values) * 20) / 20 - 0.05);
     const X = (t: number) => m.left + ((t - x0) / (x1 - x0 || 1)) * (W - m.left - m.right);
     const Y = (v: number) => m.top + (1 - (v - y0) / (1 - y0 || 1)) * (H - m.top - m.bottom);

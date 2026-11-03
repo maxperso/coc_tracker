@@ -14,7 +14,6 @@ import type { PushState } from "../lib/pwa";
 import { eventKey } from "../lib/reminders";
 import { THEME_LABEL, type ThemePref } from "../lib/theme";
 import type { Village } from "../lib/village";
-import { progressChart } from "./chart";
 import { compact, h, nf } from "./dom";
 import { ganttCard } from "./gantt";
 import { about, comparison, details, exportCheck, historyView, potionPlanView } from "./more";
@@ -23,6 +22,7 @@ import { playersView } from "./players";
 import { icon, type IconName } from "./icons";
 import { backlogView, type BacklogActions, type BacklogState } from "./backlog";
 import { orderEditor } from "./order";
+import { progressionView } from "./progression";
 import { sprite } from "./sprite";
 
 export type Tab = "summary" | "plan" | "order" | "heroes" | "buildings" | "lab" | "progress" | "players" | "backlog" | "compare" | "more";
@@ -1183,19 +1183,14 @@ function labTab(p: DashboardProps, f: Forecast): HTMLElement {
 
 function progressTab(p: DashboardProps, f: Forecast): HTMLElement {
   const v = p.village;
-  const points = progressCurve(v, f);
   const dots = p.history
     .filter((s) => s.pct && s.timestamp < v.timestamp)
     .map((s) => ({ t: (s.timestamp - v.timestamp) / 3600, global: s.pct!.global }));
-  const now = points[0];
-  const end = points.reduce((b, q) => (Math.abs(q.t - f.heroes.tHours) < Math.abs(b.t - f.heroes.tHours) ? q : b));
   return h(
     "section",
     { class: "stack" },
-    sectionHead("Progression", `Village : ${pctText(now.global)} aujourd'hui, environ ${pctText(end.global)} à la fin du Jam.`, estimate()),
-    h("section", { class: "card" }, progressChart(points, dots, v.timestamp, f.heroes.tHours)),
-    h("p", { class: "hint" }, "Le % du village est la moyenne des catégories (héros, bâtiments, murs, labo, animaux, équipements). Les points montrent tes exports passés."),
-    details("Gains depuis le dernier export", false, () => historyView(p)),
+    sectionHead(readOnly(p) ? `Progression de ${p.owner}` : "Progression", "Aujourd'hui, et ce que le Jam va changer.", estimate()),
+    progressionView({ village: v, forecast: f, history: dots, onOpen: (t) => p.onTab(t), extra: details("Gains depuis le dernier export", false, () => historyView(p)) }),
   );
 }
 
@@ -1422,7 +1417,7 @@ export function friendsSection(players: HTMLElement): HTMLElement {
   return h(
     "section",
     { class: "stack", "aria-labelledby": "friends-title" },
-    h("div", null, h("h2", { id: "friends-title", class: "section-title" }, "Amis"), h("p", { class: "muted" }, "Classés par HDV, puis par avancement de l'HDV. Touche un joueur pour voir son plan.")),
+    h("div", null, h("h2", { id: "friends-title", class: "section-title" }, "Amis"), h("p", { class: "muted" }, "Classés par HDV, puis par complétion du jeu. Touche un joueur pour voir son plan.")),
     players,
   );
 }
