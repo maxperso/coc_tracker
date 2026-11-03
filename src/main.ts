@@ -10,6 +10,7 @@ import type { Fact } from "./lib/facts";
 import { createSaver } from "./lib/saver";
 import { LATEST_RELEASE, unseenReleases } from "./lib/changelog";
 import { whatsNewDialog } from "./ui/whatsNew";
+import type { AdminState } from "./ui/admin";
 import { medalsPrompt } from "./ui/medalsPrompt";
 import { api, ApiError } from "./lib/client";
 import { parseExport } from "./lib/exportParse";
@@ -62,6 +63,8 @@ const state: {
   admin: boolean;
   /** Emails quand un de ses tickets est déployé ou commenté. */
   backlogEmails: boolean;
+  /** Panneau admin. */
+  adminState: AdminState;
   /** Page Commu sans export : amis ou backlog. */
   commuTab: CommuTab;
   friend: (Loaded & { username: string; settings: Settings; demo?: boolean }) | null;
@@ -79,6 +82,7 @@ const state: {
   backlog: { rows: null },
   admin: false,
   backlogEmails: true,
+  adminState: {},
   commuTab: "players",
   friend: null,
   friendTab: "summary",
@@ -475,6 +479,20 @@ async function loadPlayers() {
   render();
 }
 
+/* ---------- Admin ---------- */
+
+async function loadAdmin() {
+  state.adminState = { ...state.adminState, loading: true, error: undefined };
+  render();
+  try {
+    const data = await api.adminOverview();
+    state.adminState = { data };
+  } catch (e) {
+    state.adminState = { ...state.adminState, loading: false, error: handleError(e) };
+  }
+  render();
+}
+
 /* ---------- Backlog ---------- */
 
 async function loadBacklog() {
@@ -628,6 +646,7 @@ async function logout(everywhere = false) {
 function goTab(t: Tab) {
   state.tab = t;
   if (t === "players") void loadPlayers();
+  if (t === "admin") void loadAdmin();
   if (t === "backlog") {
     state.backlog = { ...state.backlog, ticket: undefined, formError: undefined };
     void loadBacklog();
@@ -821,6 +840,8 @@ function renderView(): void {
     backlogActions,
     admin: state.admin,
     rerender: render,
+    adminState: state.adminState,
+    onAdminRefresh: () => void loadAdmin(),
     tab,
     onTab: (t) => {
       if (friend) {

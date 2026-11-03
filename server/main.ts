@@ -1,6 +1,7 @@
 import { buildApp } from "./app";
 import { loadConfig } from "./config";
 import { createPool, migrate } from "./db";
+import { pruneActivity } from "./admin";
 import { seedDev } from "./dev";
 import { refreshSummaries } from "./summaries";
 import { consoleMailer, smtpMailer } from "./mailer";
@@ -45,6 +46,11 @@ else console.log(`Notifications push actives (contact ${cfg.vapid!.subject}).`);
 
 const app = await buildApp(cfg, db, mailer, push);
 await app.listen({ port: cfg.port, host: cfg.host });
+// Historique des connexions et de l'activité : 180 jours au plus, vérifié chaque jour.
+const prune = () => pruneActivity(db).catch((e) => console.error("Nettoyage de l'activité impossible :", e));
+void prune();
+const pruneTimer = setInterval(prune, 24 * 3600_000);
+pruneTimer.unref();
 // En fond : le site répond pendant ce calcul.
 refreshSummaries(db).then(
   (n) => n && console.log(`${n} résumé(s) de joueur recalculé(s).`),

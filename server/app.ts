@@ -22,6 +22,7 @@ import {
 import { MAX_CHECK_KEY, MAX_CHECKS } from "../src/lib/reminders";
 import { MAX_POTIONS_FACT } from "../src/lib/facts";
 import { LATEST_RELEASE } from "../src/lib/changelog";
+import { activityTracker, registerAdmin, type LoginMethod } from "./admin";
 import { registerBacklog, registerWhatsNew } from "./backlog";
 import { consumeCode, createCode, sentRecently } from "./codes";
 import { isAllowedEndpoint, MAX_SUBSCRIPTIONS, rebuildQueue, sendToUser, type PushSender } from "./push";
@@ -142,9 +143,12 @@ export async function buildApp(cfg: Config, db: Db, mailer: Mailer, push: PushSe
     return reply.code(status).send({ error: status === 429 ? "Trop d'essais, attends une minute." : err.message });
   });
 
+  const activity = activityTracker(db, (e) => app.log.error({ err: e }, "Activité non notée"));
+
   const requireUser = async (req: FastifyRequest, reply: FastifyReply) => {
     req.user = await readSession(req, cfg, db);
     if (!req.user) return reply.code(401).send({ error: "Connecte-toi pour continuer." });
+    activity.touch(req.user.id);
   };
 
   const bad = (reply: FastifyReply, e: z.ZodError) => reply.code(400).send({ error: e.issues[0]?.message ?? "Requête invalide." });
@@ -170,8 +174,11 @@ export async function buildApp(cfg: Config, db: Db, mailer: Mailer, push: PushSe
     sendLater(mails.verify(u.email, u.username, await createCode(db, cfg.codeSecret, Number(u.id), "verify")));
   };
 
-  const login = (reply: FastifyReply, u: UserRow) =>
-    issueSession(reply, cfg, { id: Number(u.id), username: u.username, token_version: u.token_version });
+  /** Ouvre la session et note la connexion (méthode, type d'appareil ; pas d'adresse IP). */
+  const login = async (req: FastifyRequest, reply: FastifyReply, u: UserRow, method: LoginMethod) => {
+    await issueSession(reply, cfg, { id: Number(u.id), username: u.username, token_version: u.token_version });
+    await activity.login(Number(u.id), method, req.headers["user-agent"]).catch((e) => app.log.error({ err: e }, "Connexion non notée"));
+  };
 
   app.get("/api/health", async () => {
     await db.query("select 1");
@@ -235,7 +242,7 @@ export async function buildApp(cfg: Config, db: Db, mailer: Mailer, push: PushSe
       return reply.code(400).send({ error: "Code invalide ou expiré." });
     }
     await db.query("update users set email_verified_at = now() where id = $1", [u.id]);
-    await login(reply, u);
+    await login(req, reply, u, "code");
     return { username: u.username, admin: u.is_admin, backlogEmails: u.backlog_emails } satisfies MeResponse;
   });
 
@@ -259,7 +266,7 @@ export async function buildApp(cfg: Config, db: Db, mailer: Mailer, push: PushSe
       await sendVerifyCode(u);
       return reply.code(403).send({ error: "Confirme d'abord ton email avec le code reçu.", needsVerification: true, username: u.username });
     }
-    await login(reply, u);
+    await login(req, reply, u, "password");
     return { username: u.username, admin: u.is_admin, backlogEmails: u.backlog_emails } satisfies MeResponse;
   });
 
@@ -286,7 +293,7 @@ export async function buildApp(cfg: Config, db: Db, mailer: Mailer, push: PushSe
       `update users set password_hash = $2, token_version = token_version + 1 where id = $1 returning ${USER_COLS}`,
       [u.id, await hashPassword(body.data.password)],
     );
-    await login(reply, rows[0]);
+    await login(req, reply, rows[0], "reset");
     return { username: u.username, admin: u.is_admin, backlogEmails: u.backlog_emails } satisfies MeResponse;
   });
 
@@ -440,6 +447,10 @@ export async function buildApp(cfg: Config, db: Db, mailer: Mailer, push: PushSe
   registerBacklog(app, db, requireUser, bad, (itemId, actorId, event) => {
     notifyTicket(itemId, actorId, event).catch((e) => app.log.error({ err: e }, "Échec de la notification de ticket"));
   });
+
+  /* ---------- Admin ---------- */
+
+  registerAdmin(app, db, requireUser);
 
   /* ---------- Quoi de neuf ---------- */
 

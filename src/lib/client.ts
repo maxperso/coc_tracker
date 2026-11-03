@@ -1,5 +1,5 @@
 import type { BacklogItem, BacklogKind, BacklogStatus, BacklogTicket, NewImage } from "./backlog";
-import type { AuthConfigResponse, WhatsNewResponse, MeResponse, PendingResponse, PlanChecks, PlayerProfile, PlayerRow, PushConfigResponse } from "./api";
+import type { AdminOverview, AuthConfigResponse, WhatsNewResponse, MeResponse, PendingResponse, PlanChecks, PlayerProfile, PlayerRow, PushConfigResponse } from "./api";
 import type { Settings } from "./plan";
 
 export class ApiError extends Error {
@@ -55,6 +55,7 @@ export const api = {
   pushUnsubscribe: (endpoint: string) => call<{ ok: true }>("POST", "/api/push/unsubscribe", { endpoint }),
   pushTest: () => call<{ sent: number; failed: { service: string; status?: number; reason: string }[] }>("POST", "/api/push/test", {}),
   setEmails: (backlog: boolean) => call<{ backlog: boolean }>("PUT", "/api/me/emails", { backlog }),
+  adminOverview: () => call<AdminOverview>("GET", "/api/admin/overview"),
   whatsNew: () => call<WhatsNewResponse>("GET", "/api/me/whats-new"),
   whatsNewSeen: (release: number, asOf: string) => call<{ ok: true }>("POST", "/api/me/whats-new/seen", { release, asOf }),
   backlog: () => call<BacklogItem[]>("GET", "/api/backlog"),

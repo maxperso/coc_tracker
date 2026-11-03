@@ -40,3 +40,4 @@ services:
 
 volumes:
   pgdata-dev:
+/mode

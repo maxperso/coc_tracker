@@ -21,6 +21,7 @@ import { about, comparison, details, exportCheck, historyView, potionPlanView } 
 import { sleepLabel } from "./sleep";
 import { playersView } from "./players";
 import { icon, type IconName } from "./icons";
+import { adminView, type AdminState } from "./admin";
 import { backlogView, type BacklogActions, type BacklogState } from "./backlog";
 import { confirmAction, type ConfirmSpec } from "./confirmAction";
 import { orderEditor } from "./order";
@@ -29,7 +30,7 @@ import { costTag, res } from "./resources";
 import { openUpgradeInfo } from "./upgradeInfo";
 import { sprite } from "./sprite";
 
-export type Tab = "summary" | "plan" | "order" | "heroes" | "buildings" | "lab" | "progress" | "players" | "backlog" | "compare" | "more";
+export type Tab = "summary" | "plan" | "order" | "heroes" | "buildings" | "lab" | "progress" | "players" | "backlog" | "compare" | "more" | "admin";
 
 /** Navigation principale : 5 entrées. Héros, bâtiments et labo sont regroupés sous « Village ». */
 type NavKey = "summary" | "plan" | "village" | "progress" | "players" | "compare";
@@ -46,7 +47,7 @@ const VILLAGE_TABS: Tab[] = ["heroes", "buildings", "lab"];
 export type CommuTab = "players" | "backlog";
 const COMMU_TABS: Tab[] = ["players", "backlog"];
 const navOf = (t: Tab): NavKey | null =>
-  VILLAGE_TABS.includes(t) ? "village" : COMMU_TABS.includes(t) ? "players" : t === "order" ? "plan" : t === "more" ? null : (t as NavKey);
+  VILLAGE_TABS.includes(t) ? "village" : COMMU_TABS.includes(t) ? "players" : t === "order" ? "plan" : t === "more" || t === "admin" ? null : (t as NavKey);
 
 /** Sous-onglet « Village » par défaut : celui de la stratégie. */
 const villageDefault = (s: Settings): Tab => (s.focus === "buildings" ? "buildings" : "heroes");
@@ -54,9 +55,9 @@ const villageDefault = (s: Settings): Tab => (s.focus === "buildings" ? "buildin
 /** Onglets : le profil d'un ami est en lecture seule, sans « Commu » ni « Plus ». */
 export function tabsFor(s: Settings, readOnly = false): Tab[] {
   const tabs: Tab[] = s.focus === "buildings"
-    ? ["summary", "plan", "order", "buildings", "heroes", "lab", "progress", "players", "backlog", "more"]
-    : ["summary", "plan", "order", "heroes", "buildings", "lab", "progress", "players", "backlog", "more"];
-  return readOnly ? [...tabs.filter((t) => !COMMU_TABS.includes(t) && t !== "more" && (t !== "order" || s.focus === "custom")), "compare"] : tabs;
+    ? ["summary", "plan", "order", "buildings", "heroes", "lab", "progress", "players", "backlog", "more", "admin"]
+    : ["summary", "plan", "order", "heroes", "buildings", "lab", "progress", "players", "backlog", "more", "admin"];
+  return readOnly ? [...tabs.filter((t) => !COMMU_TABS.includes(t) && t !== "more" && t !== "admin" && (t !== "order" || s.focus === "custom")), "compare"] : tabs;
 }
 
 export interface DashboardProps {
@@ -76,6 +77,9 @@ export interface DashboardProps {
   admin: boolean;
   /** Redessine la page sans rien recharger (filtre, brouillon…). */
   rerender: () => void;
+  /** Panneau admin (connexions et activité), pour l'admin seulement. */
+  adminState: AdminState;
+  onAdminRefresh: () => void;
   tab: Tab;
   onTab: (t: Tab) => void;
   onStrategy: () => void;
@@ -1261,6 +1265,14 @@ function moreTab(p: DashboardProps, f: Forecast): HTMLElement {
         h("button", { type: "button", class: "btn btn-ghost", onClick: p.onSettings }, icon("settings"), "Réglages"),
       ),
     ),
+    p.admin
+      ? h(
+          "section",
+          { class: "card admin-entry" },
+          h("div", null, h("h2", { class: "card-title" }, "Admin"), h("p", { class: "muted" }, "Qui est inscrit, qui passe sur le site, qui se connecte et depuis quel appareil.")),
+          h("button", { type: "button", class: "btn btn-primary", onClick: () => p.onTab("admin") }, "Ouvrir le panneau admin"),
+        )
+      : null,
     h("div", { class: "dash-grid" }, remindersCard(p), appCard(p)),
     emailsCard(p),
     h("section", { class: "card" }, h("h2", { class: "card-title" }, "Apparence"), themeControl(p.theme, p.onTheme)),
@@ -1509,6 +1521,7 @@ export function dashboardView(p: DashboardProps): HTMLElement {
     : COMMU_TABS.includes(p.tab) && !readOnly(p) ? playersTab(p)
     : p.tab === "compare" && readOnly(p) && p.compare ? compareTab(p, f)
     : p.tab === "more" && !readOnly(p) ? moreTab(p, f)
+    : p.tab === "admin" && p.admin && !readOnly(p) ? adminView(p.adminState, p.onAdminRefresh)
     : summaryTab(p, f);
   const ro = readOnly(p);
   return h(

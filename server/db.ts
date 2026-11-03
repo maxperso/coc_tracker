@@ -137,6 +137,30 @@ const MIGRATIONS: string[] = [
   `
   alter table users add column backlog_emails boolean not null default true;
   `,
+  // 8 : panneau admin : connexions (sans IP) et activité par jour, effacées après 180 jours.
+  `
+  alter table users add column last_seen_at timestamptz;
+
+  create table user_logins (
+    id bigserial primary key,
+    user_id bigint not null references users(id) on delete cascade,
+    at timestamptz not null default now(),
+    method text not null check (method in ('password', 'code', 'reset')),
+    device text not null default ''
+  );
+  create index user_logins_at on user_logins (at desc);
+  create index user_logins_user on user_logins (user_id, at desc);
+
+  create table user_activity (
+    user_id bigint not null references users(id) on delete cascade,
+    day date not null,
+    first_at timestamptz not null default now(),
+    last_at timestamptz not null default now(),
+    hits integer not null default 1,
+    primary key (user_id, day)
+  );
+  create index user_activity_day on user_activity (day);
+  `,
 ];
 
 export async function migrate(db: Db): Promise<number> {

@@ -599,4 +599,28 @@ describe.skipIf(!url)("API", () => {
       if (e[0]) expect(ranked.at(-1)!.summary.th).toBe(17);
     });
   });
+
+  describe("panneau admin", () => {
+    it("réservé à l'admin, avec connexions, activité et sans adresse IP", async () => {
+      const ua = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1";
+      const res = await req({ method: "POST", url: "/api/auth/login", payload: { username: "max_perso", password: "motdepasse1" }, headers: { "user-agent": ua } });
+      const admin = cookieOf(res);
+      const alice = cookieOf(await post("/api/auth/login", { username: "alice", password: "motdepasse1" }));
+      expect((await req({ url: "/api/admin/overview" })).statusCode).toBe(401);
+      expect((await req({ url: "/api/admin/overview", cookie: alice })).statusCode).toBe(403);
+      await req({ url: "/api/players", cookie: alice });
+      await new Promise((r) => setTimeout(r, 50));
+      const o = (await req({ url: "/api/admin/overview", cookie: admin })).json();
+      const max = o.users.find((u: { username: string }) => u.username === "max_perso");
+      expect(max).toMatchObject({ admin: true, verified: true, lastLogin: { device: "iPhone · Safari", method: "password" } });
+      expect(max.days7).toBeGreaterThanOrEqual(1);
+      expect(o.users.find((u: { username: string }) => u.username === "Alice").lastSeenAt).not.toBeNull();
+      expect(o.logins[0].username).toBeDefined();
+      expect(o.daily).toHaveLength(30);
+      expect(o.daily.at(-1).active).toBeGreaterThanOrEqual(2);
+      // Aucune colonne d'adresse IP n'existe.
+      const { rows } = await db.query("select column_name from information_schema.columns where table_name in ('user_logins', 'user_activity')");
+      expect(rows.map((r) => r.column_name).join(",")).not.toMatch(/ip|addr/i);
+    });
+  });
 });

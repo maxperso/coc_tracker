@@ -74,3 +74,32 @@ export interface WhatsNewResponse {
 export interface ApiError {
   error: string;
 }
+
+/** Panneau admin : comptes, connexions récentes, joueurs actifs par jour. */
+export interface AdminUser {
+  username: string;
+  email: string | null;
+  admin: boolean;
+  verified: boolean;
+  createdAt: string;
+  /** Dernière requête faite connecté (ISO), à 2 minutes près. */
+  lastSeenAt: string | null;
+  lastLogin: { at: string; device: string; method: string } | null;
+  /** Jours avec au moins une visite, sur 7 et 30 jours. */
+  days7: number;
+  days30: number;
+  logins30: number;
+  lastExportAt: string | null;
+  th: number | null;
+  pushDevices: number;
+  backlogEmails: boolean;
+}
+
+export interface AdminOverview {
+  /** Instant du serveur (ISO), pour « il y a 3 min ». */
+  now: string;
+  users: AdminUser[];
+  logins: { username: string; at: string; device: string; method: string }[];
+  /** 30 derniers jours, du plus ancien au plus récent (jour de Paris). */
+  daily: { day: string; active: number; logins: number }[];
+}
