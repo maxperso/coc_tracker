@@ -64,6 +64,30 @@ export function prunePlan(plan: PotionPlan, isUseful: (start: number) => boolean
 }
 
 /**
+ * Répartit `total` le plus également possible, sans dépasser la place de chaque jour. Un jour trop court
+ * (le dernier, qui finit à l'heure de fin du Jam) cède ce qu'il ne peut pas prendre aux autres jours,
+ * les plus tôt d'abord : une potion bue tôt avance tout le reste du plan.
+ */
+export function spread(total: number, caps: number[]): number[] {
+  const out = caps.map(() => 0);
+  let remaining = Math.min(total, caps.reduce((a, b) => a + b, 0));
+  while (remaining > 0) {
+    const open = caps.map((_, i) => i).filter((i) => out[i] < caps[i]);
+    const even = Math.floor(remaining / open.length);
+    if (even === 0) {
+      for (const i of open.slice(0, remaining)) out[i]++;
+      break;
+    }
+    for (const i of open) {
+      const add = Math.min(even, caps[i] - out[i]);
+      out[i] += add;
+      remaining -= add;
+    }
+  }
+  return out;
+}
+
+/**
  * Répartit `owned + purchases` potions sur les jours restants avant `endH`, à parts égales,
  * bues d'affilée au réveil (ou à `defaultHour` sans plage de sommeil).
  * Les achats se font au moment de boire, donc le stock ne dépasse jamais `maxStock`.
@@ -99,27 +123,27 @@ export function planPotions(opts: {
   }
 
   const usable = days.filter((d) => d.from + 1 <= endH);
+  // Créneaux d'une heure possibles chaque jour : réveillé, ce jour-là, avant la fin.
+  const slots = usable.map((d) => {
+    const out: number[] = [];
+    for (let t = nextAwake(exportUnix, d.from, sleep); t + 1 <= endH && parisDayKey(toDate(exportUnix, t)) === d.day; t = nextAwake(exportUnix, t + 1, sleep)) {
+      out.push(t);
+    }
+    return out;
+  });
+  const counts = spread(total, slots.map((s) => s.length));
+
   const result: DayPlan[] = [];
   const starts: number[] = [];
   let stock = owned;
-  let remaining = total;
   usable.forEach((d, i) => {
-    const share = Math.ceil(remaining / (usable.length - i));
-    const dayStarts: number[] = [];
-    let t = d.from;
-    while (dayStarts.length < share) {
-      t = nextAwake(exportUnix, t, sleep);
-      if (t + 1 > endH || parisDayKey(toDate(exportUnix, t)) !== d.day) break;
-      dayStarts.push(t);
-      t += 1;
-    }
+    const dayStarts = slots[i].slice(0, counts[i]);
     const bought = Math.max(0, dayStarts.length - stock);
     stock = stock + bought - dayStarts.length;
-    remaining -= dayStarts.length;
     starts.push(...dayStarts);
     result.push({ day: d.day, starts: dayStarts, bought, stockAfter: stock });
   });
-  return { starts, days: result, unplaced: remaining, owned, wasted: 0 };
+  return { starts, days: result, unplaced: total - starts.length, owned, wasted: 0 };
 }
 
 export const hoursToUnix = (exportUnix: number, h: number) => exportUnix + h * HOUR;

@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { parseExport } from "../src/lib/exportParse";
 import { gameIndex } from "../src/lib/gamedata";
 import { DEFAULT_SETTINGS, forecast, hammerTimes, heroChains, wallSummary, type Settings } from "../src/lib/plan";
-import { isAsleep, planPotions } from "../src/lib/potionPlan";
+import { isAsleep, planPotions, spread } from "../src/lib/potionPlan";
 import { levelAt, simulate, type Chain } from "../src/lib/sim";
 import { parisHourOfDay, toDate } from "../src/lib/time";
 import { buildVillage } from "../src/lib/village";
@@ -46,6 +46,22 @@ describe("planning des potions", () => {
     const plan = planPotions({ exportUnix: EXPORT_TS, endH: T, owned: 5, purchases: 50, maxStock: 5, sleep: null });
     for (const d of plan.days) expect(d.stockAfter).toBeLessThanOrEqual(5);
     expect(plan.days.reduce((s, d) => s + d.bought, 0)).toBe(50);
+  });
+  it("place toutes les potions même si le dernier jour est court (réveil 7 h, fin du Jam 9 h)", () => {
+    for (const sleep of [{ start: 23, end: 7 }, { start: 23, end: 9 }, { start: 1, end: 7 }, null]) {
+      const plan = planPotions({ exportUnix: EXPORT_TS, endH: T, owned: 5, purchases: 76, maxStock: 5, sleep });
+      expect(plan.unplaced).toBe(0);
+      expect(plan.starts).toHaveLength(81);
+      expect(new Set(plan.starts).size).toBe(81);
+      for (const t of plan.starts) expect(t + 1).toBeLessThanOrEqual(T);
+    }
+  });
+  it("répartit au plus juste selon la place de chaque jour, les premiers jours d'abord", () => {
+    expect(spread(20, [6, 6, 6, 2])).toEqual([6, 6, 6, 2]);
+    expect(spread(17, [10, 10, 10, 2])).toEqual([5, 5, 5, 2]);
+    expect(spread(10, [4, 4, 4])).toEqual([4, 3, 3]);
+    expect(spread(50, [3, 3])).toEqual([3, 3]);
+    expect(spread(0, [3, 3])).toEqual([0, 0]);
   });
   it("plafonne le stock de départ à 5", () => {
     const plan = planPotions({ exportUnix: EXPORT_TS, endH: T, owned: 9, purchases: 0, maxStock: 5, sleep: null });

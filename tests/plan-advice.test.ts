@@ -43,6 +43,22 @@ describe("achats recommandés", () => {
     expect(p.builder).toBe(Math.floor(2500 / JAM.potions.builder.medalPrice));
     expect(p.hammers).toBe(0);
   });
+  it("hybride et perso : jamais un niveau de héros payé par plus de niveaux de bâtiments", () => {
+    const v = village();
+    for (const focus of ["hybrid", "custom"] as const) {
+      for (const sleep of [{ start: 23, end: 7 }, null]) {
+        const p = recommendPurchases(v, { ...s(focus), sleep });
+        // Tout en potions d'ouvrier, sans marteau : le total choisi n'est jamais inférieur.
+        const allIn = builderForecast(v, {
+          ...s(focus),
+          sleep,
+          potions: { ...DEFAULT_SETTINGS.potions, builder: { owned: 5, purchases: Math.floor(2500 / JAM.potions.builder.medalPrice) } },
+          heroHammers: 0,
+        });
+        expect(p.heroes + p.buildings).toBeGreaterThanOrEqual(allIn.heroes.gainedLaunched + allIn.buildings.gainedLaunched);
+      }
+    }
+  });
   it("le mode manuel garde les achats saisis", () => {
     const manual = { ...s("heroes"), autoPurchases: false };
     expect(effectiveSettings(village(), manual)).toEqual({ settings: manual, purchase: null });

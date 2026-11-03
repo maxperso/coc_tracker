@@ -19,6 +19,14 @@ export interface Release {
 
 export const CHANGELOG: Release[] = [
   {
+    id: 4,
+    date: "2026-11-03",
+    changes: [
+      { kind: "bug", text: "Achats recommandés en Hybride et Perso : plus de marteaux de héros payés par des dizaines de niveaux de bâtiments. Le plan vise le plus de niveaux au total." },
+      { kind: "bug", text: "Toutes les potions achetées sont maintenant placées dans le plan, même quand le dernier jour du Jam est trop court pour en boire beaucoup." },
+    ],
+  },
+  {
     id: 3,
     date: "2026-11-03",
     changes: [{ kind: "ui", text: "Une fois connecté, tu arrives directement sur ton dashboard. La page d'accueil reste à un clic, sur le logo." }],

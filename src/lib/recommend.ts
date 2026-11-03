@@ -31,7 +31,8 @@ function withPurchase(s: Settings, builder: number, research: number, hammers: n
  * Meilleure façon de dépenser les médailles pour la stratégie choisie.
  * - Héros : le minimum de potions d'ouvrier qui donne le maximum de niveaux de héros
  *   (recherche dichotomique), le reste en potions de recherche. Les marteaux sont testés.
- * - Hybride : priorité aux héros puis aux bâtiments, donc tout en potions d'ouvrier ; marteaux testés.
+ * - Hybride et Perso : le plus de niveaux au total (héros + bâtiments), les héros départagent ; marteaux testés.
+ *   Un niveau de héros ne vaut pas vingt niveaux de bâtiments : un marteau n'est pris que s'il rapporte plus.
  * - Bâtiments : tout en potions d'ouvrier (les ouvriers ont toujours du travail).
  */
 export function recommendPurchases(v: Village, s: Settings, cfg: JamConfig = JAM): Purchase {
@@ -82,7 +83,7 @@ export function recommendPurchases(v: Village, s: Settings, cfg: JamConfig = JAM
   const key = (c: Purchase) =>
     s.focus === "heroes" ? [c.heroes, c.lab, -c.medalsUsed]
     : s.focus === "buildings" ? [c.buildings, c.lab, -c.medalsUsed]
-    : [c.heroes, c.buildings, c.lab, -c.medalsUsed];
+    : [c.heroes + c.buildings, c.heroes, c.lab, -c.medalsUsed];
   const better = (a: Purchase, b: Purchase) => {
     const ka = key(a);
     const kb = key(b);
