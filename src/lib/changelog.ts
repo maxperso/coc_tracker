@@ -19,6 +19,11 @@ export interface Release {
 
 export const CHANGELOG: Release[] = [
   {
+    id: 3,
+    date: "2026-11-03",
+    changes: [{ kind: "ui", text: "Une fois connecté, tu arrives directement sur ton dashboard. La page d'accueil reste à un clic, sur le logo." }],
+  },
+  {
     id: 2,
     date: "2026-11-03",
     changes: [
@@ -43,5 +48,16 @@ export const CHANGELOG: Release[] = [
 
 export const LATEST_RELEASE = Math.max(0, ...CHANGELOG.map((r) => r.id));
 
-/** Mises à jour pas encore vues, la plus récente d'abord. */
-export const unseenReleases = (seen: number): Release[] => CHANGELOG.filter((r) => r.id > seen).sort((a, b) => b.id - a.id);
+/**
+ * Mises à jour pas encore vues, la plus récente d'abord. Celles d'un même jour sont regroupées :
+ * le joueur voit une seule « mise à jour du 3 novembre ».
+ */
+export function unseenReleases(seen: number): Release[] {
+  const out: Release[] = [];
+  for (const r of CHANGELOG.filter((x) => x.id > seen).sort((a, b) => b.id - a.id)) {
+    const sameDay = out.find((x) => x.date === r.date);
+    if (sameDay) sameDay.changes = [...sameDay.changes, ...r.changes];
+    else out.push({ ...r, changes: [...r.changes] });
+  }
+  return out;
+}

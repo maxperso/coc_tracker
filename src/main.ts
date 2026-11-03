@@ -160,9 +160,11 @@ async function boot(): Promise<void> {
     // Pas de session (401) : rien à signaler. Sinon, le serveur ne répond pas.
     if (!(e instanceof ApiError && e.status === 401)) state.landingError = "Le serveur ne répond pas pour le moment : la connexion est indisponible.";
   }
-  // La page d'accueil s'affiche toujours en premier, connecté ou non. En mode dev : directement le site.
-  state.view = (await config)?.devLogin && state.me ? (state.mine ? "dash" : "home") : "landing";
+  await config;
+  // Connecté : directement son dashboard (ou l'écran d'export s'il n'y en a pas encore). Sinon, la page d'accueil.
+  state.view = state.me ? (state.mine ? "dash" : "home") : "landing";
   render();
+  // Par-dessus, les nouveautés pas encore vues.
   void showWhatsNew();
 }
 
