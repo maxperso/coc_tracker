@@ -3773,3 +3773,118 @@ select.input {
     transition: none;
   }
 }
+
+/* ---------- Quoi de neuf ? ---------- */
+/* Le titre reçoit le focus à l'ouverture : la lecture commence en haut, sans contour visible. */
+.wn-title:focus {
+  outline: none;
+}
+
+.whats-new .settings-head p {
+  margin-top: 2px;
+}
+
+.wn-release {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.wn-date {
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+  font-size: 1rem;
+  font-weight: 700;
+}
+
+.wn-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.wn-kind {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.875rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.wn-feature .wn-kind {
+  color: var(--done-strong);
+}
+
+.wn-bug .wn-kind {
+  color: var(--danger-text);
+}
+
+.wn-list {
+  margin: 0;
+  padding-left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  line-height: 1.45;
+}
+
+.wn-tickets {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.wn-ticket {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.18s ease, background-color 0.18s ease;
+}
+
+.wn-ticket:hover {
+  border-color: var(--border-strong);
+  background: var(--soft);
+}
+
+.wn-ticket:focus-visible {
+  outline: 2px solid var(--text);
+  outline-offset: 2px;
+}
+
+.wn-ticket-main {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.wn-ticket-title {
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+
+.whats-new[open] {
+  animation: enter-rise 0.3s var(--ease-out);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .whats-new[open] {
+    animation: none;
+  }
+}

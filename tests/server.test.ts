@@ -9,6 +9,7 @@ import { loadConfig } from "../server/config";
 import { createPool, migrate, type Db } from "../server/db";
 import type { Mail } from "../server/mailer";
 import { isAllowedEndpoint, rebuildQueue, sendDue, type PushSubscriptionRow } from "../server/push";
+import { LATEST_RELEASE } from "../src/lib/changelog";
 import { DEFAULT_SETTINGS } from "../src/lib/plan";
 
 const url = process.env.DATABASE_URL_TEST;
@@ -463,6 +464,44 @@ describe.skipIf(!url)("API", () => {
       const res = await post("/api/backlog", { kind: "change", title: "Encore une" }, dave);
       expect(res.statusCode).toBe(429);
       expect(res.json().error).toContain("par jour");
+    });
+  });
+
+  describe("quoi de neuf", () => {
+    const put = (url: string, payload: unknown, cookie: string) => req({ method: "PUT", url, payload: payload as object, cookie });
+    const seen = (cookie: string, release: number, asOf: string) => post("/api/me/whats-new/seen", { release, asOf }, cookie);
+
+    it("un nouveau compte n'a rien à rattraper", async () => {
+      const newcomer = await signup("zoe", "zoe@example.test");
+      expect((await req({ url: "/api/me/whats-new", cookie: newcomer })).json()).toMatchObject({ seenRelease: LATEST_RELEASE, tickets: [] });
+    });
+
+    it("un ancien compte voit les mises à jour une seule fois", async () => {
+      const alice = cookieOf(await post("/api/auth/login", { username: "alice", password: "motdepasse1" }));
+      await db.query("update users set seen_release = 0 where lower(username) = 'alice'");
+      const first = (await req({ url: "/api/me/whats-new", cookie: alice })).json();
+      expect(first.seenRelease).toBe(0);
+      expect((await seen(alice, LATEST_RELEASE + 50, first.asOf)).statusCode).toBe(200);
+      const after = (await req({ url: "/api/me/whats-new", cookie: alice })).json();
+      // Un numéro trop grand est ramené à la dernière mise à jour connue.
+      expect(after.seenRelease).toBe(LATEST_RELEASE);
+      expect((await seen(alice, 0, after.asOf)).statusCode).toBe(200);
+      expect((await req({ url: "/api/me/whats-new", cookie: alice })).json().seenRelease).toBe(LATEST_RELEASE);
+      expect((await seen(alice, 1, "hier")).statusCode).toBe(400);
+    });
+
+    it("annonce un ticket déployé une fois, à tout le monde", async () => {
+      const alice = cookieOf(await post("/api/auth/login", { username: "alice", password: "motdepasse1" }));
+      const admin = cookieOf(await post("/api/auth/login", { username: "max_perso", password: "motdepasse1" }));
+      const before = (await req({ url: "/api/me/whats-new", cookie: alice })).json();
+      await seen(alice, LATEST_RELEASE, before.asOf);
+      const t = (await post("/api/backlog", { kind: "feature", title: "Coût total par jour, livré" }, alice)).json();
+      expect((await req({ url: "/api/me/whats-new", cookie: alice })).json().tickets).toEqual([]);
+      await put(`/api/backlog/${t.id}/status`, { status: "deployed" }, admin);
+      const now = (await req({ url: "/api/me/whats-new", cookie: alice })).json();
+      expect(now.tickets.map((x: { id: number }) => x.id)).toEqual([t.id]);
+      await seen(alice, LATEST_RELEASE, now.asOf);
+      expect((await req({ url: "/api/me/whats-new", cookie: alice })).json().tickets).toEqual([]);
     });
   });
 });

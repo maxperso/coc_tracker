@@ -19,6 +19,8 @@ import {
   type BacklogTicket,
   type NewImage,
 } from "../src/lib/backlog";
+import type { WhatsNewResponse } from "../src/lib/api";
+import { LATEST_RELEASE } from "../src/lib/changelog";
 import type { Db } from "./db";
 
 type Guard = (req: FastifyRequest, reply: FastifyReply) => Promise<unknown>;
@@ -300,5 +302,39 @@ export function registerBacklog(app: FastifyInstance, db: Db, requireUser: Guard
       .header("Content-Disposition", "inline")
       .type(rows[0].mime)
       .send(rows[0].data);
+  });
+}
+
+const Seen = z.object({ release: z.number().int().min(0).max(1_000_000), asOf: z.string().datetime() });
+
+/**
+ * « Quoi de neuf ? » : la dernière mise à jour vue par le joueur, et les tickets passés en Déployé ou
+ * Validé depuis sa dernière lecture. Mémorisé par compte : affiché une seule fois, sur tous ses appareils.
+ */
+export function registerWhatsNew(app: FastifyInstance, db: Db, requireUser: Guard, bad: Bad): void {
+  app.get("/api/me/whats-new", { preHandler: requireUser }, async (req) => {
+    const userId = req.user!.id;
+    const { rows } = await db.query<{ seen_release: number; seen_at: Date; now: Date }>(
+      "select seen_release, whats_new_seen_at as seen_at, now() as now from users where id = $1",
+      [userId],
+    );
+    const { rows: tickets } = await db.query<ItemRow>(
+      `${ITEM_SELECT} where b.status in ('deployed', 'validated') and b.moved_at > $2 order by b.moved_at desc limit 20`,
+      [userId, rows[0].seen_at],
+    );
+    return { seenRelease: rows[0].seen_release, tickets: tickets.map(toItem), asOf: rows[0].now.toISOString() } satisfies WhatsNewResponse;
+  });
+
+  app.post("/api/me/whats-new/seen", { preHandler: requireUser }, async (req, reply) => {
+    const body = Seen.safeParse(req.body);
+    if (!body.success) return bad(reply, body.error);
+    // `asOf` : l'instant de la liste affichée ; un ticket déployé entre-temps sera montré la prochaine fois.
+    await db.query(
+      `update users set seen_release = greatest(seen_release, least($2::int, $3::int)),
+         whats_new_seen_at = greatest(whats_new_seen_at, least($4::timestamptz, now()))
+       where id = $1`,
+      [req.user!.id, body.data.release, LATEST_RELEASE, body.data.asOf],
+    );
+    return { ok: true };
   });
 }

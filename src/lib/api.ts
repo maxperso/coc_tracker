@@ -1,3 +1,4 @@
+import type { BacklogItem } from "./backlog";
 import type { Settings } from "./plan";
 import type { PlayerSummary } from "./summary";
 
@@ -53,6 +54,14 @@ export interface PlayerProfile {
   exports: StoredExport[];
   /** Coches du plan ; à ignorer si elles concernent un autre export que le dernier. */
   checks: PlanChecks | null;
+}
+
+/** « Quoi de neuf ? » : dernière mise à jour vue, tickets déployés depuis la dernière lecture. */
+export interface WhatsNewResponse {
+  seenRelease: number;
+  tickets: BacklogItem[];
+  /** Instant de la liste, renvoyé tel quel pour la marquer lue. */
+  asOf: string;
 }
 
 export interface ApiError {

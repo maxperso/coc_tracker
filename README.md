@@ -85,6 +85,12 @@ docker compose up -d
 Ne change plus ces clés ensuite : les appareils abonnés devraient se réabonner. Chaque joueur active
 les rappels dans *Mon compte* (sur iPhone, après avoir installé le site sur l'écran d'accueil).
 
+### Quoi de neuf ?
+
+À chaque mise à jour visible, ajouter une entrée en tête de `src/lib/changelog.ts` (numéro `id` plus grand
+que le précédent, nouveautés / corrections / interface). Chaque joueur la voit une seule fois, à sa
+prochaine visite, avec les tickets du backlog passés en Déployé depuis sa dernière lecture.
+
 ### Administration
 
 ```bash

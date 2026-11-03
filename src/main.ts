@@ -7,6 +7,8 @@ import "./styles.css";
 import type { MeResponse, PlanChecks, PlayerProfile, PlayerRow } from "./lib/api";
 import type { BacklogItem, BacklogTicket } from "./lib/backlog";
 import { createSaver } from "./lib/saver";
+import { LATEST_RELEASE, unseenReleases } from "./lib/changelog";
+import { whatsNewDialog } from "./ui/whatsNew";
 import { api, ApiError } from "./lib/client";
 import { parseExport } from "./lib/exportParse";
 import { gameIndex } from "./lib/gamedata";
@@ -158,6 +160,7 @@ async function boot(): Promise<void> {
   // La page d'accueil s'affiche toujours en premier, connecté ou non.
   state.view = "landing";
   render();
+  void showWhatsNew();
 }
 
 /** Depuis la page d'accueil : ton dashboard, ou l'écran pour coller l'export s'il n'y en a pas encore. */
@@ -218,6 +221,45 @@ async function signedIn(me: MeResponse) {
   state.auth = { mode: "login", busy: false, inviteRequired: state.auth.inviteRequired };
   await loadMine();
   render();
+  void showWhatsNew();
+}
+
+/* ---------- Quoi de neuf ? ---------- */
+
+let whatsNewShown = false;
+/** Une fois par mise à jour et par compte : rien si le joueur a déjà tout vu. */
+async function showWhatsNew() {
+  if (whatsNewShown || !state.me) return;
+  try {
+    const r = await api.whatsNew();
+    const releases = unseenReleases(r.seenRelease);
+    if (!releases.length && !r.tickets.length) return;
+    whatsNewShown = true;
+    const dlg = whatsNewDialog({
+      releases,
+      tickets: r.tickets,
+      onOpenTicket: openBacklogTicket,
+      // Vu, même sans avoir tout lu. Si l'envoi échoue, la fenêtre revient à la prochaine visite.
+      onClose: () => void api.whatsNewSeen(LATEST_RELEASE, r.asOf).catch(() => {}),
+    });
+    document.body.append(dlg);
+    dlg.showModal();
+  } catch {
+    // Pas grave : on réessaiera à la prochaine visite.
+  }
+}
+
+function openBacklogTicket(id: number) {
+  state.friend = null;
+  if (state.mine) {
+    state.view = "dash";
+    state.tab = "backlog";
+  } else {
+    state.view = "players";
+    state.commuTab = "backlog";
+  }
+  void loadBacklog();
+  void openTicket(id);
 }
 
 const authActions = {
@@ -363,7 +405,9 @@ async function loadPlayers() {
 
 async function loadBacklog() {
   try {
-    state.backlog = { ...state.backlog, rows: await api.backlog(), error: undefined };
+    // Lire l'état après la réponse : un ticket a pu être ouvert pendant le chargement.
+    const rows = await api.backlog();
+    state.backlog = { ...state.backlog, rows, error: undefined };
   } catch (e) {
     state.backlog = { ...state.backlog, error: handleError(e) };
   }

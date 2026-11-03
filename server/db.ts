@@ -127,6 +127,12 @@ const MIGRATIONS: string[] = [
   );
   create index backlog_images_item on backlog_images (item_id);
   `,
+  // 6 : « Quoi de neuf ? » vu une seule fois par compte. Les comptes existants n'ont encore rien vu ;
+  // pour les tickets déployés, on part de maintenant (pas tout l'historique).
+  `
+  alter table users add column seen_release integer not null default 0;
+  alter table users add column whats_new_seen_at timestamptz not null default now();
+  `,
 ];
 
 export async function migrate(db: Db): Promise<number> {

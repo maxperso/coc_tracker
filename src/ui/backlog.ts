@@ -266,7 +266,7 @@ function voteButton(it: BacklogItem, a: BacklogActions, small = false): HTMLElem
   );
 }
 
-function kindTag(kind: BacklogKind): HTMLElement {
+export function kindTag(kind: BacklogKind): HTMLElement {
   return h("span", { class: `bl-kind bl-kind-${kind}` }, icon(KIND_ICON[kind], 14), KIND_LABEL[kind]);
 }
 

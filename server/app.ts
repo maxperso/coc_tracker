@@ -20,7 +20,8 @@ import {
   type SessionUser,
 } from "./auth";
 import { MAX_CHECK_KEY, MAX_CHECKS } from "../src/lib/reminders";
-import { registerBacklog } from "./backlog";
+import { LATEST_RELEASE } from "../src/lib/changelog";
+import { registerBacklog, registerWhatsNew } from "./backlog";
 import { consumeCode, createCode, sentRecently } from "./codes";
 import { isAllowedEndpoint, MAX_SUBSCRIPTIONS, rebuildQueue, sendToUser, type PushSender } from "./push";
 import type { Config } from "./config";
@@ -208,8 +209,9 @@ export async function buildApp(cfg: Config, db: Db, mailer: Mailer, push: PushSe
     }
 
     const { rows } = await db.query<UserRow>(
-      `insert into users (username, email, password_hash) values ($1, $2, $3) returning ${USER_COLS}`,
-      [username, email, await hashPassword(password)],
+      // Un nouveau compte n'a rien à rattraper dans « Quoi de neuf ? ».
+      `insert into users (username, email, password_hash, seen_release) values ($1, $2, $3, $4) returning ${USER_COLS}`,
+      [username, email, await hashPassword(password), LATEST_RELEASE],
     );
     await sendVerifyCode(rows[0]);
     return reply.code(202).send(pending);
@@ -381,6 +383,10 @@ export async function buildApp(cfg: Config, db: Db, mailer: Mailer, push: PushSe
   /* ---------- Backlog ---------- */
 
   registerBacklog(app, db, requireUser, bad);
+
+  /* ---------- Quoi de neuf ---------- */
+
+  registerWhatsNew(app, db, requireUser, bad);
 
   /* ---------- Plan coché ---------- */
 
