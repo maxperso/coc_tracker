@@ -1,6 +1,6 @@
 import { GROUP_LABEL, groupOf, isPermanentBuilding, priorityRank, type BuildingGroup } from "../lib/buildings";
 import { displayName, findByName, gameIndex, maxLevel, type Entry } from "../lib/gamedata";
-import type { PlayerRow } from "../lib/api";
+import type { PlayerRow, VillageInfo } from "../lib/api";
 import type { Snapshot } from "../lib/history";
 import { overlaps } from "../lib/cwl";
 import type { Fact, Facts } from "../lib/facts";
@@ -89,7 +89,13 @@ export interface DashboardProps {
   onOrder: (o: UpgradeOrder) => void;
   onSettings: () => void;
   onNewExport: () => void;
-  onOpenPlayer: (username: string) => void;
+  onOpenPlayer: (username: string, tag?: string) => void;
+  /** Ses comptes CoC ; vide pour le village d'un ami. */
+  villages: VillageInfo[];
+  onSwitchVillage: (tag: string) => void;
+  /** Coller l'export d'un autre compte CoC. */
+  onAddVillage: () => void;
+  onRemoveVillage: (tag: string) => void;
   onBack: () => void;
   /** Quitte le profil d'un ami pour revenir à son propre dashboard. */
   onMine: () => void;
@@ -521,7 +527,7 @@ function summaryTab(p: DashboardProps, f: Forecast): HTMLElement {
   const g = globalPct(cats);
   const game = globalPct(progress(v, "game"));
   const rows = p.players.rows ?? [];
-  const rank = rows.findIndex((r) => r.username.toLowerCase() === p.owner.toLowerCase());
+  const rank = rows.findIndex((r) => r.username.toLowerCase() === p.owner.toLowerCase() && r.summary.tag === v.tag);
   const tiles = [
     tile(`HDV ${v.th}`, pctText(g), `jeu complet ${pctText(game)} · environ ${pctText(endPoint.global)} à la fin du Jam`, go("progress")),
     s.focus !== "buildings" || f.heroes.gainedLaunched
@@ -1315,6 +1321,7 @@ function moreTab(p: DashboardProps, f: Forecast): HTMLElement {
           h("button", { type: "button", class: "btn btn-primary", onClick: () => p.onTab("admin") }, "Ouvrir le panneau admin"),
         )
       : null,
+    villagesCard(p),
     h("div", { class: "dash-grid" }, remindersCard(p), appCard(p)),
     emailsCard(p),
     h("section", { class: "card" }, h("h2", { class: "card-title" }, "Apparence"), themeControl(p.theme, p.onTheme)),
@@ -1326,6 +1333,74 @@ function moreTab(p: DashboardProps, f: Forecast): HTMLElement {
       { class: "button-row" },
       h("button", { type: "button", class: "btn btn-ghost", onClick: p.onLogout }, "Se déconnecter"),
       h("button", { type: "button", class: "btn btn-ghost", onClick: p.onLogoutAll }, "Se déconnecter partout"),
+    ),
+  );
+}
+
+/** Choix du compte CoC affiché, et ajout d'un autre compte. Absent sur le village d'un ami. */
+function villageMenu(p: DashboardProps): HTMLElement | null {
+  if (readOnly(p)) return null;
+  const v = p.village;
+  const menu: HTMLDetailsElement = h(
+    "details",
+    { class: "vmenu" },
+    h("summary", { class: "vmenu-current", title: "Changer de compte CoC" }, h("strong", null, v.tag), h("span", { class: "muted" }, ` · HDV ${v.th}`), h("span", { class: "vmenu-caret", "aria-hidden": "true" }, "▾")),
+    h(
+      "div",
+      { class: "vmenu-list", role: "menu" },
+      p.villages.map((x) =>
+        h(
+          "button",
+          {
+            type: "button",
+            role: "menuitemradio",
+            "aria-checked": String(x.tag === v.tag),
+            class: "vmenu-item",
+            onClick: () => {
+              menu.open = false;
+              if (x.tag !== v.tag) p.onSwitchVillage(x.tag);
+            },
+          },
+          h("span", null, h("strong", null, x.tag), h("span", { class: "hint" }, ` · HDV ${x.th}`)),
+          x.tag === v.tag ? icon("check", 16) : null,
+        ),
+      ),
+      h("button", { type: "button", role: "menuitem", class: "vmenu-item vmenu-add", onClick: () => ((menu.open = false), p.onAddVillage()) }, "+ Ajouter un compte CoC"),
+    ),
+  );
+  return menu;
+}
+
+/** Mon compte : ses comptes CoC, en ajouter un, en retirer un. */
+function villagesCard(p: DashboardProps): HTMLElement {
+  return h(
+    "section",
+    { class: "card" },
+    h("div", { class: "card-head" }, h("h2", { class: "card-title" }, "Mes comptes CoC"), h("button", { type: "button", class: "btn btn-ghost", onClick: p.onAddVillage }, "Ajouter un compte")),
+    h("p", { class: "muted" }, "Chaque compte a son plan, ses réglages et ses coches. Colle l'export de l'autre compte pour l'ajouter."),
+    h(
+      "ul",
+      { class: "vlist" },
+      p.villages.map((x) =>
+        h(
+          "li",
+          null,
+          h("span", null, h("strong", null, x.tag), h("span", { class: "hint" }, ` · HDV ${x.th} · export du ${fmtDateTime(new Date(x.updatedAt))}`)),
+          x.tag === p.village.tag
+            ? h("span", { class: "pill" }, "affiché")
+            : h("button", { type: "button", class: "link", onClick: () => p.onSwitchVillage(x.tag) }, "Afficher"),
+          h(
+            "button",
+            {
+              type: "button",
+              class: "bl-delete",
+              onClick: () => confirm(`Retirer le compte ${x.tag} ? Ses exports, réglages et coches seront effacés.`) && p.onRemoveVillage(x.tag),
+            },
+            icon("trash", 14),
+            "Retirer",
+          ),
+        ),
+      ),
     ),
   );
 }
@@ -1571,7 +1646,12 @@ export function dashboardView(p: DashboardProps): HTMLElement {
     { class: ro ? "app viewing-friend" : "app" },
     appHeader(p),
     ro ? h("div", { class: "friend-frame", "aria-hidden": "true" }) : null,
-    h("main", { class: "page dash" }, h("p", { class: "eyebrow" }, `Export du ${fmtDateTime(toDate(v.timestamp, 0))} · heure de Paris`), body),
+    h(
+      "main",
+      { class: "page dash" },
+      h("div", { class: "dash-top" }, villageMenu(p), h("p", { class: "eyebrow" }, `Export du ${fmtDateTime(toDate(v.timestamp, 0))} · heure de Paris`)),
+      body,
+    ),
     bottomNav(p),
   );
 }

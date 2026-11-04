@@ -32,6 +32,9 @@ async function call<T>(method: string, url: string, body?: unknown, keepalive = 
   return data as T;
 }
 
+/** « ?tag=%23CQVP2JVC » : le village (compte CoC) concerné ; rien = le dernier exporté. */
+const tagQuery = (tag?: string | null) => (tag ? `?tag=${encodeURIComponent(tag)}` : "");
+
 export const api = {
   me: () => call<MeResponse>("GET", "/api/auth/me"),
   authConfig: () => call<AuthConfigResponse>("GET", "/api/auth/config"),
@@ -44,11 +47,12 @@ export const api = {
   reset: (email: string, code: string, password: string) => call<MeResponse>("POST", "/api/auth/reset", { email, code, password }),
   logout: () => call<{ ok: true }>("POST", "/api/auth/logout"),
   logoutAll: () => call<{ ok: true }>("POST", "/api/auth/logout-all"),
-  settings: () => call<Settings>("GET", "/api/me/settings"),
-  saveSettings: (s: Settings, keepalive = false) => call<Settings>("PUT", "/api/me/settings", s, keepalive),
-  uploadExport: (text: string) => call<{ ok: true }>("POST", "/api/exports", { text }),
+  settings: (tag?: string | null) => call<Settings>("GET", `/api/me/settings${tagQuery(tag)}`),
+  saveSettings: (s: Settings, keepalive = false, tag?: string | null) => call<Settings>("PUT", `/api/me/settings${tagQuery(tag)}`, s, keepalive),
+  uploadExport: (text: string) => call<{ ok: true; tag: string; created: boolean }>("POST", "/api/exports", { text }),
+  deleteVillage: (tag: string) => call<{ ok: true }>("DELETE", `/api/me/villages/${encodeURIComponent(tag)}`),
   players: () => call<PlayerRow[]>("GET", "/api/players"),
-  profile: (username: string) => call<PlayerProfile>("GET", `/api/players/${encodeURIComponent(username)}`),
+  profile: (username: string, tag?: string | null) => call<PlayerProfile>("GET", `/api/players/${encodeURIComponent(username)}${tagQuery(tag)}`),
   saveChecks: (c: PlanChecks, keepalive = false) => call<PlanChecks>("PUT", "/api/me/checks", c, keepalive),
   pushConfig: () => call<PushConfigResponse>("GET", "/api/push/config"),
   pushSubscribe: (sub: { endpoint: string; keys: { p256dh: string; auth: string } }) => call<{ ok: true }>("POST", "/api/push/subscribe", sub),

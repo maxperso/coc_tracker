@@ -34,6 +34,7 @@ async function ensureExport(db: Db, userId: number, hoursAgo: number) {
     "insert into exports (user_id, tag, exported_at, raw, summary) values ($1, $2, to_timestamp($3), $4, $5)",
     [userId, village.tag, village.timestamp, raw, summarize(village, DEFAULT_SETTINGS)],
   );
+  await db.query("insert into user_villages (user_id, tag, settings) values ($1, $2, $3) on conflict do nothing", [userId, village.tag, DEFAULT_SETTINGS]);
 }
 
 async function ensureBacklog(db: Db, me: number, friend: number) {

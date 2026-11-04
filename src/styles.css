@@ -4629,3 +4629,127 @@ select.input {
   gap: 8px;
   line-height: 1.45;
 }
+
+/* ---------- Plusieurs comptes CoC ---------- */
+.dash-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+}
+
+.vmenu {
+  position: relative;
+}
+
+.vmenu-current {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  min-height: 36px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--soft);
+  cursor: pointer;
+  list-style: none;
+  font-size: 0.875rem;
+}
+
+.vmenu-current::-webkit-details-marker {
+  display: none;
+}
+
+.vmenu-current:hover {
+  border-color: var(--border-strong);
+}
+
+.vmenu-current:focus-visible {
+  outline: 2px solid var(--text);
+  outline-offset: 2px;
+}
+
+.vmenu-caret {
+  margin-left: 6px;
+  color: var(--muted);
+}
+
+.vmenu-list {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 12;
+  display: flex;
+  flex-direction: column;
+  min-width: 240px;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--bg);
+  box-shadow: 0 16px 32px -16px rgba(0, 0, 0, 0.45);
+}
+
+.vmenu-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 44px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 10px;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 0.9375rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.vmenu-item:hover,
+.vmenu-item:focus-visible {
+  background: var(--soft);
+  outline: none;
+}
+
+.vmenu-item[aria-checked="true"] .icon {
+  color: var(--done-strong);
+}
+
+.vmenu-add {
+  margin-top: 4px;
+  border-top: 1px solid var(--border);
+  border-radius: 0 0 10px 10px;
+  color: var(--done-strong);
+  font-weight: 600;
+}
+
+.vlist {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.vlist li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.vlist li:last-child {
+  border-bottom: 0;
+}
+
+.vlist li > span:first-child {
+  flex: 1;
+  min-width: 0;
+}
+
+.player-tag {
+  font-weight: 500;
+}

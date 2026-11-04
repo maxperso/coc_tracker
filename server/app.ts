@@ -6,7 +6,7 @@ import { existsSync } from "node:fs";
 import { z } from "zod";
 import type { AuthConfigResponse, MeResponse, PendingResponse, PlayerProfile, PlayerRow } from "../src/lib/api";
 import { MAX_EXPORT_CHARS } from "../src/lib/exportParse";
-import { parseSettings, SettingsSchema } from "../src/lib/settingsSchema";
+import { SettingsSchema } from "../src/lib/settingsSchema";
 import { summarize, villageFromText } from "../src/lib/summary";
 import {
   checkPassword,
@@ -24,6 +24,7 @@ import { MAX_POTIONS_FACT } from "../src/lib/facts";
 import { LATEST_RELEASE } from "../src/lib/changelog";
 import { activityTracker, registerAdmin, type LoginMethod } from "./admin";
 import { registerBacklog, registerWhatsNew } from "./backlog";
+import { ensureVillage, resolveTag, villageChecks, villagesOf, villageSettings } from "./villages";
 import { consumeCode, createCode, sentRecently } from "./codes";
 import { isAllowedEndpoint, MAX_SUBSCRIPTIONS, rebuildQueue, sendToUser, type PushSender } from "./push";
 import type { Config } from "./config";
@@ -323,19 +324,30 @@ export async function buildApp(cfg: Config, db: Db, mailer: Mailer, push: PushSe
 
   /* ---------- Réglages ---------- */
 
-  app.get("/api/me/settings", { preHandler: requireUser }, async (req) => {
-    const { rows } = await db.query<{ settings: unknown }>("select settings from users where id = $1", [req.user!.id]);
-    return parseSettings(rows[0]?.settings);
+  /** Réglages d'un village (`?tag=`), à défaut du dernier exporté. */
+  app.get<{ Querystring: { tag?: string } }>("/api/me/settings", { preHandler: requireUser }, async (req) => {
+    const tag = await resolveTag(db, req.user!.id, req.query.tag);
+    return villageSettings(db, req.user!.id, tag);
   });
 
-  app.put("/api/me/settings", { preHandler: requireUser }, async (req, reply) => {
+  app.put<{ Querystring: { tag?: string } }>("/api/me/settings", { preHandler: requireUser }, async (req, reply) => {
     const body = SettingsSchema.safeParse(req.body);
     if (!body.success) return bad(reply, body.error);
-    await db.query("update users set settings = $2 where id = $1", [req.user!.id, body.data]);
-    // Le classement affiche le plan avec ces réglages : on recalcule le résumé du dernier export.
+    const userId = req.user!.id;
+    const tag = await resolveTag(db, userId, req.query.tag);
+    // Les réglages du compte servent aussi de modèle pour un prochain village.
+    await db.query("update users set settings = $2 where id = $1", [userId, body.data]);
+    if (tag) {
+      await db.query(
+        `insert into user_villages (user_id, tag, settings) values ($1, $2, $3)
+         on conflict (user_id, tag) do update set settings = excluded.settings`,
+        [userId, tag, body.data],
+      );
+    }
+    // Le classement affiche le plan avec ces réglages : on recalcule le résumé du dernier export du village.
     const { rows } = await db.query<{ id: string; raw: unknown }>(
-      "select id, raw from exports where user_id = $1 order by exported_at desc limit 1",
-      [req.user!.id],
+      "select id, raw from exports where user_id = $1 and tag = $2 order by exported_at desc limit 1",
+      [userId, tag ?? ""],
     );
     if (rows[0]) {
       const summary = summarize(villageFromText(JSON.stringify(rows[0].raw)), body.data);
@@ -356,31 +368,34 @@ export async function buildApp(cfg: Config, db: Db, mailer: Mailer, push: PushSe
     } catch (e) {
       return reply.code(400).send({ error: (e as Error).message });
     }
-    const { rows: s } = await db.query<{ settings: unknown }>("select settings from users where id = $1", [req.user!.id]);
-    const summary = summarize(village, parseSettings(s[0]?.settings));
+    const userId = req.user!.id;
+    const created = await ensureVillage(db, userId, village.tag);
+    const summary = summarize(village, await villageSettings(db, userId, village.tag));
     await db.query(
       `insert into exports (user_id, tag, exported_at, raw, summary)
        values ($1, $2, to_timestamp($3), $4, $5)
        on conflict (user_id, exported_at) do update set tag = excluded.tag, raw = excluded.raw, summary = excluded.summary`,
       [req.user!.id, village.tag, village.timestamp, JSON.parse(body.data.text), summary],
     );
+    // Historique gardé par village.
     await db.query(
-      `delete from exports where user_id = $1 and id not in (
-         select id from exports where user_id = $1 order by exported_at desc limit $2)`,
-      [req.user!.id, KEPT_EXPORTS],
+      `delete from exports where user_id = $1 and tag = $2 and id not in (
+         select id from exports where user_id = $1 and tag = $2 order by exported_at desc limit $3)`,
+      [userId, village.tag, KEPT_EXPORTS],
     );
-    refreshReminders(req.user!.id);
-    return reply.code(201).send({ ok: true });
+    refreshReminders(userId);
+    return reply.code(201).send({ ok: true, tag: village.tag, created });
   });
 
   /* ---------- Joueurs ---------- */
 
   app.get("/api/players", { preHandler: requireUser }, async () => {
+    // Une ligne par compte CoC : un joueur avec deux villages apparaît deux fois.
     const { rows } = await db.query<{ username: string; summary: PlayerRow["summary"]; created_at: Date }>(
-      `select distinct on (u.id) u.username, e.summary, e.created_at
+      `select distinct on (u.id, e.tag) u.username, e.summary, e.created_at
        from users u join exports e on e.user_id = u.id
        where u.email_verified_at is not null
-       order by u.id, e.exported_at desc`,
+       order by u.id, e.tag, e.exported_at desc`,
     );
     const out: PlayerRow[] = rows.map((r) => ({ username: r.username, summary: r.summary, updatedAt: r.created_at.toISOString() }));
     // Classement par HDV d'abord (un HDV 17, même au max, reste derrière les HDV 18), puis par
@@ -390,25 +405,41 @@ export async function buildApp(cfg: Config, db: Db, mailer: Mailer, push: PushSe
     return out.sort((a, b) => b.summary.th - a.summary.th || game(b) - game(a) || b.summary.pct.global - a.summary.pct.global);
   });
 
-  app.get<{ Params: { username: string } }>("/api/players/:username", { preHandler: requireUser }, async (req, reply) => {
-    const { rows: users } = await db.query<{ id: string; username: string; settings: unknown; plan_checks: PlayerProfile["checks"] }>(
-      "select id, username, settings, plan_checks from users where lower(username) = lower($1) and email_verified_at is not null",
+  /** Profil d'un joueur pour un de ses villages (`?tag=`), à défaut le dernier exporté. */
+  app.get<{ Params: { username: string }; Querystring: { tag?: string } }>("/api/players/:username", { preHandler: requireUser }, async (req, reply) => {
+    const { rows: users } = await db.query<{ id: string; username: string }>(
+      "select id, username from users where lower(username) = lower($1) and email_verified_at is not null",
       [req.params.username],
     );
     const u = users[0];
     if (!u) return reply.code(404).send({ error: "Joueur introuvable." });
+    const userId = Number(u.id);
+    const villages = await villagesOf(db, userId);
+    const tag = villages.find((v) => v.tag === req.query.tag)?.tag ?? villages[0]?.tag ?? null;
     const { rows } = await db.query<{ raw: unknown; exported_at: Date }>(
       `select raw, exported_at from (
-         select raw, exported_at from exports where user_id = $1 order by exported_at desc limit $2
+         select raw, exported_at from exports where user_id = $1 and tag = $2 order by exported_at desc limit $3
        ) t order by exported_at asc`,
-      [u.id, PROFILE_EXPORTS],
+      [userId, tag ?? "", PROFILE_EXPORTS],
     );
     return {
       username: u.username,
-      settings: parseSettings(u.settings),
+      tag,
+      villages,
+      settings: await villageSettings(db, userId, tag),
       exports: rows.map((r) => ({ raw: r.raw, exportedAt: r.exported_at.toISOString() })),
-      checks: u.plan_checks ?? null,
+      checks: await villageChecks(db, userId, tag),
     } satisfies PlayerProfile;
+  });
+
+  /** Retire un compte CoC : ses exports, réglages et coches. */
+  app.delete<{ Params: { tag: string } }>("/api/me/villages/:tag", { preHandler: requireUser }, async (req, reply) => {
+    const userId = req.user!.id;
+    const { rowCount } = await db.query("delete from exports where user_id = $1 and tag = $2", [userId, req.params.tag]);
+    await db.query("delete from user_villages where user_id = $1 and tag = $2", [userId, req.params.tag]);
+    if (!rowCount) return reply.code(404).send({ error: "Village introuvable." });
+    refreshReminders(userId);
+    return { ok: true };
   });
 
   /* ---------- Backlog ---------- */
@@ -462,7 +493,20 @@ export async function buildApp(cfg: Config, db: Db, mailer: Mailer, push: PushSe
     const body = Checks.safeParse(req.body);
     if (!body.success) return bad(reply, body.error);
     const value = { exportAt: body.data.exportAt, keys: [...new Set(body.data.keys)], facts: body.data.facts ?? {} };
+    // Les coches vont au village de l'export qu'elles concernent.
+    const { rows: ex } = await db.query<{ tag: string }>(
+      "select tag from exports where user_id = $1 and exported_at = to_timestamp($2) limit 1",
+      [req.user!.id, value.exportAt],
+    );
+    const tag = ex[0]?.tag ?? (await resolveTag(db, req.user!.id));
     await db.query("update users set plan_checks = $2 where id = $1", [req.user!.id, value]);
+    if (tag) {
+      await db.query(
+        `insert into user_villages (user_id, tag, plan_checks) values ($1, $2, $3)
+         on conflict (user_id, tag) do update set plan_checks = excluded.plan_checks`,
+        [req.user!.id, tag, value],
+      );
+    }
     // Heures réelles confirmées : les rappels suivants se recalent dessus.
     if (Object.keys(value.facts).length) refreshReminders(req.user!.id);
     return value;

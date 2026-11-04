@@ -9,9 +9,10 @@ import type { Db } from "./db";
 export async function refreshSummaries(db: Db): Promise<number> {
   const { rows } = await db.query<{ id: string; raw: unknown; settings: unknown }>(
     `select * from (
-       select distinct on (e.user_id) e.id, e.raw, e.summary, u.settings
+       select distinct on (e.user_id, e.tag) e.id, e.raw, e.summary, coalesce(v.settings, u.settings) as settings
        from exports e join users u on u.id = e.user_id
-       order by e.user_id, e.exported_at desc
+       left join user_villages v on v.user_id = e.user_id and v.tag = e.tag
+       order by e.user_id, e.tag, e.exported_at desc
      ) last where last.summary->'pct'->'game' is null`,
   );
   for (const r of rows) {

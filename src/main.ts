@@ -4,7 +4,7 @@ import "@fontsource/inter/latin-600.css";
 import "@fontsource/inter/latin-700.css";
 import "./styles.css";
 
-import type { MeResponse, PlanChecks, PlayerProfile, PlayerRow } from "./lib/api";
+import type { MeResponse, PlanChecks, PlayerProfile, PlayerRow, VillageInfo } from "./lib/api";
 import type { BacklogItem, BacklogTicket } from "./lib/backlog";
 import type { Fact } from "./lib/facts";
 import { createSaver } from "./lib/saver";
@@ -54,6 +54,9 @@ const state: {
   settings: Settings;
   samePass: boolean;
   mine: Loaded | null;
+  /** Ses comptes CoC (villages), le plus récent d'abord, et celui affiché. */
+  villages: VillageInfo[];
+  tag: string | null;
   /** Nouvel export : le formulaire de stratégie redemande les médailles. */
   newExport: boolean;
   tab: Tab;
@@ -76,6 +79,8 @@ const state: {
   settings: structuredClone(DEFAULT_SETTINGS),
   samePass: true,
   mine: null,
+  villages: [],
+  tag: null,
   newExport: false,
   tab: "summary",
   players: { rows: null },
@@ -143,9 +148,31 @@ function handleError(e: unknown): string {
   return e instanceof Error ? e.message : "Erreur inattendue.";
 }
 
-async function loadMine(): Promise<void> {
-  const [settings, profile] = await Promise.all([api.settings(), api.profile(state.me!)]);
-  state.settings = settings;
+/* ---------- Comptes CoC (villages) ---------- */
+
+const villageKey = () => `coc-tracker:village:${(state.me ?? "").toLowerCase()}`;
+function rememberVillage(tag: string | null) {
+  try {
+    if (tag) localStorage.setItem(villageKey(), tag);
+  } catch {
+    // Navigation privée : on reprendra le dernier exporté.
+  }
+}
+function storedVillage(): string | null {
+  try {
+    return localStorage.getItem(villageKey());
+  } catch {
+    return null;
+  }
+}
+
+/** Charge un de ses villages (`tag`), à défaut celui choisi la dernière fois, sinon le dernier exporté. */
+async function loadMine(tag: string | null = storedVillage()): Promise<void> {
+  const profile = await api.profile(state.me!, tag);
+  state.villages = profile.villages;
+  state.tag = profile.tag;
+  rememberVillage(profile.tag);
+  state.settings = await api.settings(profile.tag);
   state.mine = loadProfile(profile);
   state.view = state.mine ? "dash" : "home";
   // Le classement sert aussi au dashboard : chargé en fond, comme l'état des rappels.
@@ -338,12 +365,12 @@ async function submitExport(text: string) {
     document.getElementById("export-input")?.focus();
     return;
   }
-  // Premier export : le questionnaire complet. Ensuite, les réglages sont gardés.
-  const first = !state.mine;
   try {
-    await api.uploadExport(text.trim());
-    const profile = await api.profile(state.me!);
-    state.mine = loadProfile(profile);
+    // Premier export d'un compte CoC (nouveau tag) : le questionnaire complet. Ensuite, les réglages sont gardés.
+    const { tag, created } = await api.uploadExport(text.trim());
+    const first = created || !state.villages.some((v) => v.tag === tag);
+    state.friend = null;
+    await loadMine(tag);
     state.homeError = undefined;
     state.tab = "summary";
     if (first || !state.mine) {
@@ -415,8 +442,8 @@ function saveFailed(what: string) {
 }
 
 /** Réglages : affichés tout de suite ; la saisie rapide est regroupée (600 ms) avant l'envoi. */
-const settingsSaver = createSaver<Settings>({
-  send: (s, keepalive) => api.saveSettings(s, keepalive),
+const settingsSaver = createSaver<{ tag: string | null; settings: Settings }>({
+  send: (v, keepalive) => api.saveSettings(v.settings, keepalive, v.tag),
   onError: saveFailed("Réglages pas encore enregistrés"),
   delayMs: 600,
 });
@@ -424,7 +451,7 @@ const settingsSaver = createSaver<Settings>({
 function setSettings(next: Settings, immediate = false): void {
   state.settings = next;
   render();
-  settingsSaver.save(next);
+  settingsSaver.save({ tag: state.tag, settings: next });
   if (immediate) settingsSaver.flush();
 }
 
@@ -608,15 +635,49 @@ const backlogActions: BacklogActions = {
   },
 };
 
-async function openPlayer(username: string) {
+/** Passe à un autre de ses comptes CoC. */
+async function switchVillage(tag: string) {
+  state.friend = null;
+  try {
+    await loadMine(tag);
+    state.tab = "summary";
+    state.view = state.mine ? "dash" : "home";
+  } catch (e) {
+    toast(handleError(e));
+  }
+  render();
+  window.scrollTo(0, 0);
+}
+
+/** Ajoute un compte CoC : on colle son export, le questionnaire suit. */
+function addVillage() {
+  state.homeError = undefined;
+  state.view = "home";
+  render();
+  window.scrollTo(0, 0);
+}
+
+async function removeVillage(tag: string) {
+  try {
+    await api.deleteVillage(tag);
+    await loadMine(state.tag === tag ? null : state.tag);
+    if (!state.mine) state.view = "home";
+  } catch (e) {
+    toast(handleError(e));
+  }
+  render();
+}
+
+async function openPlayer(username: string, tag?: string) {
   if (username.toLowerCase() === state.me?.toLowerCase()) {
+    if (tag && tag !== state.tag) return void switchVillage(tag);
     state.view = state.mine ? "dash" : "home";
     state.tab = "summary";
     render();
     return;
   }
   try {
-    const p = await api.profile(username);
+    const p = await api.profile(username, tag);
     const loaded = loadProfile(p);
     if (!loaded) return;
     state.friend = { ...loaded, username: p.username, settings: p.settings };
@@ -634,6 +695,8 @@ async function logout(everywhere = false) {
   await (everywhere ? api.logoutAll() : api.logout()).catch(() => {});
   state.me = null;
   state.mine = null;
+  state.villages = [];
+  state.tag = null;
   state.friend = null;
   state.players = { rows: null };
   state.backlog = { rows: null };
@@ -681,7 +744,7 @@ function playersPage(): HTMLElement {
     commuSwitch(state.commuTab, goCommu),
     state.commuTab === "backlog"
       ? backlogView(state.backlog, backlogActions, { admin: state.admin, rerender: render })
-      : friendsSection(playersView({ ...state.players, me: state.me!, onOpen: (u) => void openPlayer(u) })),
+      : friendsSection(playersView({ ...state.players, me: state.me!, onOpen: (u, tag) => void openPlayer(u, tag) })),
   );
 }
 
@@ -859,7 +922,11 @@ function renderView(): void {
     onOrder: (order) => setSettings({ ...state.settings, focus: "custom", order }),
     onSettings: () => dialog?.showModal(),
     onNewExport: () => ((state.view = "home"), render()),
-    onOpenPlayer: (u) => void openPlayer(u),
+    onOpenPlayer: (u, tag) => void openPlayer(u, tag),
+    villages: friend ? [] : state.villages,
+    onSwitchVillage: (tag) => void switchVillage(tag),
+    onAddVillage: addVillage,
+    onRemoveVillage: (tag) => void removeVillage(tag),
     onBack: () => {
       state.view = state.mine ? "dash" : "players";
       if (state.mine) goTab("players");

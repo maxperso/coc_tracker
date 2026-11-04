@@ -19,6 +19,13 @@ export interface Release {
 
 export const CHANGELOG: Release[] = [
   {
+    id: 13,
+    date: "2026-11-04",
+    changes: [
+      { kind: "feature", text: "Plusieurs comptes CoC sur un même compte : colle l'export d'un autre compte pour l'ajouter. Chacun a son plan, ses réglages, ses coches et ses rappels ; tu passes de l'un à l'autre en haut du dashboard (et dans Mon compte)." },
+    ],
+  },
+  {
     id: 12,
     date: "2026-11-04",
     changes: [

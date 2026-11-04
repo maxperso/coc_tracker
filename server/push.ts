@@ -81,24 +81,34 @@ export function isAllowedEndpoint(endpoint: string): boolean {
 
 export const MAX_SUBSCRIPTIONS = 10;
 
-/** Recalcule les rappels d'un joueur depuis son dernier export et ses réglages. Sans abonnement : rien. */
+/**
+ * Recalcule les rappels d'un joueur depuis le dernier export de chacun de ses villages, avec les
+ * réglages et coches de ce village. Plusieurs villages : chaque rappel dit de quel compte CoC il s'agit.
+ * Sans abonnement : rien.
+ */
 export async function rebuildQueue(db: Db, userId: number, now = Date.now() / 1000): Promise<number> {
   const { rows: subs } = await db.query("select 1 from push_subscriptions where user_id = $1 limit 1", [userId]);
   await db.query("delete from push_queue where user_id = $1 and sent_at is null", [userId]);
   if (!subs.length) return 0;
-  const { rows } = await db.query<{ raw: unknown; settings: unknown; checks: { exportAt?: number; facts?: Facts } | null }>(
-    `select e.raw, u.settings, u.plan_checks as checks from exports e join users u on u.id = e.user_id
-     where e.user_id = $1 order by e.exported_at desc limit 1`,
+  const { rows } = await db.query<{ tag: string; raw: unknown; settings: unknown; checks: { exportAt?: number; facts?: Facts } | null }>(
+    `select distinct on (e.tag) e.tag, e.raw, coalesce(v.settings, u.settings) as settings, v.plan_checks as checks
+     from exports e join users u on u.id = e.user_id
+     left join user_villages v on v.user_id = e.user_id and v.tag = e.tag
+     where e.user_id = $1 order by e.tag, e.exported_at desc`,
     [userId],
   );
-  if (!rows[0]) return 0;
-  const village = villageFromText(JSON.stringify(rows[0].raw));
-  const settings = effectiveSettings(village, parseSettings(rows[0].settings)).settings;
-  // Heures réelles confirmées en cochant, si elles portent sur cet export.
-  const facts = rows[0].checks?.exportAt === village.timestamp ? (rows[0].checks.facts ?? {}) : {};
-  const reminders: Reminder[] = planReminders(forecast(village, settings, undefined, facts), village.timestamp, now);
-  const exp = exportReminder(village.timestamp, settings.sleep, Date.parse(JAM.end) / 1000);
-  if (exp && exp.at > now) reminders.push(exp);
+  const several = rows.length > 1;
+  const reminders: Reminder[] = [];
+  for (const row of rows) {
+    const village = villageFromText(JSON.stringify(row.raw));
+    const settings = effectiveSettings(village, parseSettings(row.settings)).settings;
+    // Heures réelles confirmées en cochant, si elles portent sur cet export.
+    const facts = row.checks?.exportAt === village.timestamp ? (row.checks.facts ?? {}) : {};
+    const mine = planReminders(forecast(village, settings, undefined, facts), village.timestamp, now);
+    const exp = exportReminder(village.timestamp, settings.sleep, Date.parse(JAM.end) / 1000);
+    if (exp && exp.at > now) mine.push(exp);
+    for (const r of mine) reminders.push(several ? { ...r, key: `${row.tag}:${r.key}`, title: `${row.tag} · ${r.title}` } : r);
+  }
   if (!reminders.length) return 0;
   await db.query(
     `insert into push_queue (user_id, key, send_at, title, body)
@@ -106,7 +116,7 @@ export async function rebuildQueue(db: Db, userId: number, now = Date.now() / 10
      from jsonb_to_recordset($2::jsonb) as r(key text, at double precision, title text, body text)
      on conflict (user_id, key) do update
        set send_at = excluded.send_at, title = excluded.title, body = excluded.body, sent_at = null`,
-    [userId, JSON.stringify(reminders)],
+    [userId, JSON.stringify(reminders.slice(0, 600))],
   );
   return reminders.length;
 }

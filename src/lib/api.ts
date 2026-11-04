@@ -56,6 +56,10 @@ export interface StoredExport {
 
 export interface PlayerProfile {
   username: string;
+  /** Village affiché (tag CoC). */
+  tag: string | null;
+  /** Tous les comptes CoC de ce joueur, le plus récent d'abord. */
+  villages: VillageInfo[];
   settings: Settings;
   /** Exports du plus ancien au plus récent (30 au plus). */
   exports: StoredExport[];
@@ -102,4 +106,12 @@ export interface AdminOverview {
   logins: { username: string; at: string; device: string; method: string }[];
   /** 30 derniers jours, du plus ancien au plus récent (jour de Paris). */
   daily: { day: string; active: number; logins: number }[];
+}
+
+/** Un compte CoC (village) rattaché au compte COC Tracker. */
+export interface VillageInfo {
+  tag: string;
+  th: number;
+  /** Dernier export (ISO). */
+  updatedAt: string;
 }

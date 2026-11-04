@@ -161,6 +161,26 @@ const MIGRATIONS: string[] = [
   );
   create index user_activity_day on user_activity (day);
   `,
+  // 9 : plusieurs comptes CoC par compte : réglages et coches par village (tag). Les réglages et coches
+  // actuels vont au village du dernier export ; les autres villages déjà exportés reprennent les réglages.
+  `
+  create table user_villages (
+    user_id bigint not null references users(id) on delete cascade,
+    tag text not null,
+    settings jsonb,
+    plan_checks jsonb,
+    created_at timestamptz not null default now(),
+    primary key (user_id, tag)
+  );
+  insert into user_villages (user_id, tag, settings, plan_checks)
+    select distinct on (e.user_id) e.user_id, e.tag, u.settings, u.plan_checks
+    from exports e join users u on u.id = e.user_id
+    order by e.user_id, e.exported_at desc;
+  insert into user_villages (user_id, tag, settings)
+    select distinct e.user_id, e.tag, u.settings from exports e join users u on u.id = e.user_id
+    on conflict do nothing;
+  create index exports_user_tag_time on exports (user_id, tag, exported_at desc);
+  `,
 ];
 
 export async function migrate(db: Db): Promise<number> {

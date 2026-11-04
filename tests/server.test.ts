@@ -623,4 +623,40 @@ describe.skipIf(!url)("API", () => {
       expect(rows.map((r) => r.column_name).join(",")).not.toMatch(/ip|addr/i);
     });
   });
+
+  describe("plusieurs comptes CoC", () => {
+    it("un village par tag : réglages, coches et classement séparés, et on peut en retirer un", async () => {
+      const fay = await signup("fay", "fay@example.test");
+      const second = fixture.replace('"#ANON0001"', '"#ANON0002"').replace(/"timestamp": (\d+)/, (_m, t) => `"timestamp": ${Number(t) + 3600}`);
+      expect((await post("/api/exports", { text: fixture }, fay)).json()).toMatchObject({ tag: "#ANON0001", created: true });
+      expect((await post("/api/exports", { text: second }, fay)).json()).toMatchObject({ tag: "#ANON0002", created: true });
+      expect((await post("/api/exports", { text: fixture }, fay)).json().created).toBe(false);
+
+      const me = (await req({ url: "/api/players/fay", cookie: fay })).json();
+      expect(me.villages.map((v: { tag: string }) => v.tag)).toEqual(["#ANON0002", "#ANON0001"]);
+      expect(me.tag).toBe("#ANON0002");
+      expect((await req({ url: "/api/players/fay?tag=%23ANON0001", cookie: fay })).json().tag).toBe("#ANON0001");
+
+      // Réglages propres à chaque village.
+      const put = (tag: string, focus: string) => req({ method: "PUT", url: `/api/me/settings?tag=${encodeURIComponent(tag)}`, cookie: fay, payload: { ...DEFAULT_SETTINGS, focus } });
+      expect((await put("#ANON0001", "heroes")).statusCode).toBe(200);
+      expect((await put("#ANON0002", "buildings")).statusCode).toBe(200);
+      expect((await req({ url: "/api/me/settings?tag=%23ANON0001", cookie: fay })).json().focus).toBe("heroes");
+      expect((await req({ url: "/api/me/settings?tag=%23ANON0002", cookie: fay })).json().focus).toBe("buildings");
+
+      // Les coches vont au village de leur export.
+      const ts = JSON.parse(fixture).timestamp;
+      await req({ method: "PUT", url: "/api/me/checks", cookie: fay, payload: { exportAt: ts, keys: ["L:a:2"] } });
+      expect((await req({ url: "/api/players/fay?tag=%23ANON0001", cookie: fay })).json().checks.keys).toEqual(["L:a:2"]);
+      expect((await req({ url: "/api/players/fay?tag=%23ANON0002", cookie: fay })).json().checks).toBeNull();
+
+      // Une ligne par compte au classement.
+      const rows = (await req({ url: "/api/players", cookie: fay })).json().filter((r: { username: string }) => r.username === "fay");
+      expect(rows.map((r: { summary: { tag: string } }) => r.summary.tag).sort()).toEqual(["#ANON0001", "#ANON0002"]);
+
+      expect((await req({ method: "DELETE", url: "/api/me/villages/%23ANON0002", cookie: fay })).statusCode).toBe(200);
+      expect((await req({ url: "/api/players/fay", cookie: fay })).json().villages.map((v: { tag: string }) => v.tag)).toEqual(["#ANON0001"]);
+      expect((await req({ method: "DELETE", url: "/api/me/villages/%23NOPE", cookie: fay })).statusCode).toBe(404);
+    });
+  });
 });
