@@ -1,5 +1,5 @@
 import { overlaps, type Blackout } from "./cwl";
-import type { Entry } from "./gamedata";
+import { levelAllowed, type Entry, type Gates, type Level } from "./gamedata";
 import { isAsleep, nextAwake, type Sleep } from "./potionPlan";
 import { boostFor, costFactor, durationFactor, reducedSeconds, type BoostScope, type GoldPass, JAM, type JamConfig } from "./rules";
 import { HOUR } from "./time";
@@ -9,6 +9,8 @@ export interface Step {
   toLevel: number;
   baseSeconds: number;
   baseCost: number;
+  /** Ce qu'il faut pour atteindre ce niveau (HDV, labo, salle des héros…) ; absent : rien. */
+  line?: Level;
 }
 
 export interface Chain {
@@ -25,6 +27,17 @@ export interface Chain {
   hammerable?: boolean;
   /** Priorité : plus petit = lancé en premier. La politique départage les égalités. */
   priority?: number;
+  /** Exemplaire pas encore construit, disponible à partir de cet HDV. */
+  unlockTh?: number;
+  /** Bâtiment qui débloque des niveaux (HDV, labo, salle des héros, animalerie, forge) en montant. */
+  unlocks?: keyof Gates;
+}
+
+/** Un bâtiment qui débloque atteint un niveau. */
+export interface GateEvent {
+  t: number;
+  key: keyof Gates;
+  level: number;
 }
 
 export interface Segment {
@@ -63,6 +76,10 @@ export interface SimInput {
   blackout?: Blackout;
   /** Lancements confirmés par le joueur : « clé de chaîne:niveau » → heures depuis l'export. */
   forced?: ReadonlyMap<string, number>;
+  /** Niveaux des bâtiments qui débloquent (HDV, labo…) à l'export. Absent : aucun niveau n'est bloqué. */
+  gates?: Gates;
+  /** Montées de ces bâtiments simulées ailleurs (ex. le labo, construit par les ouvriers) : instant (h) et niveau. */
+  gateEvents?: GateEvent[];
   cfg?: JamConfig;
 }
 
@@ -131,6 +148,27 @@ export function simulate(input: SimInput): SimResult {
     [t, ...windows.map((w) => w.end).filter((e) => e > t)].find((x) => fits(ci, x)) ?? Infinity;
   const prio = (ci: number) => chains[ci].priority ?? 0;
 
+  // Niveaux débloqués : ceux de l'export, puis chaque montée d'HDV, de labo… au fil du plan.
+  const gates: Gates | undefined = input.gates ? { ...input.gates } : undefined;
+  const external = [...(input.gateEvents ?? [])].sort((a, b) => a.t - b.t);
+  const raise = (key: keyof Gates, level: number) => {
+    if (gates) gates[key] = Math.max(gates[key] ?? 0, level);
+  };
+  const applyExternal = (t: number) => {
+    while (external.length && external[0].t <= t + EPS) {
+      const ev = external.shift()!;
+      raise(ev.key, ev.level);
+    }
+  };
+  /** Le prochain niveau d'une chaîne est débloqué (HDV, labo…) et l'exemplaire existe à cet HDV. */
+  const unlocked = (ci: number) => {
+    if (!gates) return true;
+    const c = chains[ci];
+    if (c.unlockTh != null && gates.th < c.unlockTh) return false;
+    const line = c.steps[next[ci]]?.line;
+    return !line || levelAllowed(line, gates);
+  };
+
   const forced = input.forced ?? new Map<string, number>();
   /** Heure confirmée du prochain niveau d'une chaîne, s'il y en a une. */
   const forcedAt = (ci: number) => {
@@ -142,7 +180,7 @@ export function simulate(input: SimInput): SimResult {
     // Un niveau dont le lancement est confirmé à une heure plus tardive attend cette heure.
     const idle = chains
       .map((_, ci) => ci)
-      .filter((ci) => !busy(ci) && next[ci] < chains[ci].steps.length && !((forcedAt(ci) ?? -Infinity) > t + EPS));
+      .filter((ci) => !busy(ci) && next[ci] < chains[ci].steps.length && !((forcedAt(ci) ?? -Infinity) > t + EPS) && unlocked(ci));
     const ready = idle.filter((ci) => fits(ci, t));
     // Les héros gardés qui attendent la fin d'une attaque gardent leur ouvrier : une chaîne moins
     // prioritaire ne le prend que si elle a fini avant qu'ils puissent repartir.
@@ -189,6 +227,7 @@ export function simulate(input: SimInput): SimResult {
 
   let t = 0;
   for (let guard = 0; guard < 100_000; guard++) {
+    applyExternal(t);
     // Lancements confirmés : à leur heure, même la nuit. Le niveau d'avant est alors forcément fini,
     // même si le plan le croyait encore en cours (potions bues autrement, marteau…).
     for (let ci = 0; ci < chains.length; ci++) {
@@ -197,6 +236,8 @@ export function simulate(input: SimInput): SimResult {
       const running = active.findIndex((a) => a.ci === ci);
       if (running >= 0) {
         active[running].seg.end = Math.min(active[running].seg.end, t);
+        const key = chains[ci].unlocks;
+        if (key) raise(key, active[running].seg.toLevel);
         active.splice(running, 1);
       }
       launch(ci, t);
@@ -223,7 +264,8 @@ export function simulate(input: SimInput): SimResult {
     // Fin d'une attaque : un héros gardé peut repartir en chantier.
     const nextFree = Math.min(...windows.map((w) => w.end).filter((e) => e > t + EPS));
     const nextForced = Math.min(...chains.map((_, ci) => forcedAt(ci) ?? Infinity).filter((f) => f > t + EPS));
-    const nextT = Math.min(nextEnd, nextHammer, wake ?? Infinity, nextFree, nextForced);
+    const nextGate = external.length ? external[0].t : Infinity;
+    const nextT = Math.min(nextEnd, nextHammer, wake ?? Infinity, nextFree, nextForced, nextGate);
     if (!Number.isFinite(nextT) || nextT >= jamEndH - EPS) break;
     t = Math.max(t, nextT);
 
@@ -238,7 +280,13 @@ export function simulate(input: SimInput): SimResult {
         best.seg.hammered = true;
       }
     }
-    for (let i = active.length - 1; i >= 0; i--) if (active[i].seg.end <= t + EPS) active.splice(i, 1);
+    for (let i = active.length - 1; i >= 0; i--) {
+      if (active[i].seg.end > t + EPS) continue;
+      // Un HDV, un labo… qui finit débloque les niveaux suivants des autres chaînes.
+      const key = chains[active[i].ci].unlocks;
+      if (key) raise(key, active[i].seg.toLevel);
+      active.splice(i, 1);
+    }
   }
   unusedHammers += hammers.filter((h) => h < jamEndH).length;
   return { results, idleAsleepHours, unusedHammers };

@@ -19,6 +19,13 @@ export interface Release {
 
 export const CHANGELOG: Release[] = [
   {
+    id: 12,
+    date: "2026-11-04",
+    changes: [
+      { kind: "feature", text: "HDV en dessous de 18 : le plan monte l'HDV, le labo et la salle des héros quand c'est rentable, construit les bâtiments qui te manquent, et ajoute les niveaux débloqués au fil du Jam. Il compare deux ordres et garde celui qui finit le Jam avec la meilleure complétion du jeu." },
+    ],
+  },
+  {
     id: 11,
     date: "2026-11-03",
     changes: [

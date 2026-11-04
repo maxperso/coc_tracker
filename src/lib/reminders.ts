@@ -22,7 +22,8 @@ export function eventText(e: PlanEvent): string {
   if (e.kind === "potion") return `Bois ${e.count} potion${e.count > 1 ? "s" : ""} ${POTION[e.pool]}`;
   if (e.kind === "attack") return `Attaque de LDC${e.heroes.length ? ` avec ${e.heroes.map((r) => heroLabel(r.chain)).join(", ")}` : ""}`;
   const c = e.result.chain;
-  return `${c.category === "heroes" ? heroLabel(c) : displayName(c.entry)} ${e.seg.toLevel - 1} → ${e.seg.toLevel}`;
+  const name = c.category === "heroes" ? heroLabel(c) : displayName(c.entry);
+  return e.seg.toLevel === 1 ? `${name} (à construire)` : `${name} ${e.seg.toLevel - 1} → ${e.seg.toLevel}`;
 }
 
 export interface Reminder {

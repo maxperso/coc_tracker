@@ -1,11 +1,12 @@
 import { isPermanentBuilding, priorityRank } from "./buildings";
 import { DEFAULT_CWL, cwlBlackout, type Blackout, type Cwl } from "./cwl";
+import { globalPct, progress, progressAt } from "./progress";
 import { launchFacts, potionFacts, type Facts } from "./facts";
-import { HERO_SHORT, maxLevel, stepCost, type Gates } from "./gamedata";
+import { gameIndex, HERO_SHORT, levelLine, maxLevel, stepCost, type Gates } from "./gamedata";
 import type { ResolvedItem } from "./exportParse";
 import { planPotions, prunePlan, type PotionPlan, type Sleep } from "./potionPlan";
 import { JAM, type BoostScope, type GoldPass, type JamConfig } from "./rules";
-import { levelAt, levelLaunched, simulate, type Chain, type ChainResult, type Policy, type Step } from "./sim";
+import { levelAt, levelLaunched, simulate, type Chain, type ChainResult, type GateEvent, type Policy, type Step } from "./sim";
 import { HOUR, capacityHours, hoursBetween } from "./time";
 import type { Village } from "./village";
 import { WorkClock } from "./workclock";
@@ -77,16 +78,30 @@ export const DEFAULT_SETTINGS: Settings = {
   order: { builder: [], lab: [], pet: [], off: [] },
 };
 
-export function buildChain(item: ResolvedItem, gates: Gates, scope: BoostScope, hammerable = false): Chain {
+/** Bâtiments dont la montée débloque des niveaux ailleurs. */
+const UNLOCKERS: Record<string, keyof Gates> = {
+  "Town Hall": "th",
+  Laboratory: "lab",
+  "Hero Hall": "heroHall",
+  "Pet House": "petHouse",
+  Blacksmith: "blacksmith",
+};
+
+/**
+ * Tous les niveaux à venir jusqu'au max du jeu, chacun avec ce qu'il demande (HDV, labo…) :
+ * la simulation ne lance un niveau qu'une fois débloqué, au fil des montées d'HDV et de labo.
+ */
+export function buildChain(item: ResolvedItem, scope: BoostScope, hammerable = false): Chain {
   const current = item.lvl ?? 0;
-  const cap = maxLevel(item.entry, gates);
+  const cap = Math.max(0, ...(item.entry.levels ?? []).map((l) => l.l));
   const upgrading = item.timer != null && item.timer > 0;
   const steps: Step[] = [];
   for (let from = upgrading ? current + 1 : current; from < cap; from++) {
     const s = stepCost(item.category, item.entry, from);
     if (!s) break;
-    steps.push({ toLevel: from + 1, baseSeconds: s.seconds, baseCost: s.cost });
+    steps.push({ toLevel: from + 1, baseSeconds: s.seconds, baseCost: s.cost, line: levelLine(item.entry, from + 1) });
   }
+  const unlocks = item.category === "buildings" ? UNLOCKERS[item.entry.name] : undefined;
   return {
     key: `${item.category}:${item.entry.id}`,
     category: item.category,
@@ -96,6 +111,7 @@ export function buildChain(item: ResolvedItem, gates: Gates, scope: BoostScope, 
     steps,
     scope,
     hammerable,
+    ...(unlocks ? { unlocks } : {}),
   };
 }
 
@@ -103,16 +119,33 @@ const isHomeHero = (i: ResolvedItem) => i.category === "heroes" && i.entry.villa
 const keepInProgressOnly = (c: Chain): Chain => ({ ...c, steps: [] });
 
 export function heroChains(v: Village): Chain[] {
-  return v.items.filter(isHomeHero).map((i) => buildChain(i, v.gates, "builder", true));
+  return v.items.filter(isHomeHero).map((i) => buildChain(i, "builder", true));
 }
 
 /** Une chaîne par exemplaire de bâtiment permanent (ou de piège), avec sa priorité « défenses d'abord ». */
 export function buildingChains(v: Village): Chain[] {
   const out: Chain[] = [];
+  const built = new Map<number, number>();
   for (const i of v.items.filter(isPermanentBuilding)) {
+    built.set(i.entry.id, (built.get(i.entry.id) ?? 0) + (i.cnt ?? 1));
     for (let n = 0; n < (i.cnt ?? 1); n++) {
-      const c = buildChain(i, { th: v.th }, "builder");
+      const c = buildChain(i, "builder");
       out.push({ ...c, key: `${c.key}:${i.lvl}:${n}:${out.length}`, priority: 1 + priorityRank(i.category, i.entry) });
+    }
+  }
+  // Bâtiments pas encore construits : ceux que l'HDV actuel permet déjà, puis ceux des HDV suivants.
+  // Chaque exemplaire attend l'HDV qui l'autorise. Les cabanes d'ouvrier s'achètent en gemmes : exclues.
+  const data = gameIndex().data;
+  for (const [id, row] of Object.entries(data.thCounts)) {
+    const found = gameIndex().byId.get(Number(id))?.find((f) => (f.category === "buildings" || f.category === "traps") && (f.entry.levels?.length ?? 0) > 0);
+    if (!found || found.entry.village !== "home" || found.entry.name === "Wall" || found.entry.name === "Builder's Hut") continue;
+    const have = built.get(found.entry.id) ?? 0;
+    const most = Math.max(0, ...row.slice(v.th));
+    for (let j = have; j < most; j++) {
+      const unlockTh = row.findIndex((count, th) => th >= v.th && count > j);
+      if (unlockTh < 0) continue;
+      const c = buildChain({ category: found.category, entry: found.entry, lvl: 0 } as ResolvedItem, "builder");
+      out.push({ ...c, key: `${c.key}:new:${j}`, priority: 1 + priorityRank(found.category, found.entry), unlockTh });
     }
   }
   return out;
@@ -122,7 +155,7 @@ export function buildingChains(v: Village): Chain[] {
 function guardianChains(v: Village): Chain[] {
   return v.items
     .filter((i) => i.category === "guardians" && (i.timer ?? 0) > 0)
-    .map((i, n) => ({ ...keepInProgressOnly(buildChain(i, v.gates, "builder")), key: `guardians:${i.entry.id}:${n}` }));
+    .map((i, n) => ({ ...keepInProgressOnly(buildChain(i, "builder")), key: `guardians:${i.entry.id}:${n}` }));
 }
 
 export function labChains(v: Village): Chain[] {
@@ -132,11 +165,11 @@ export function labChains(v: Village): Chain[] {
         (i.category === "troops" && i.entry.village === "home" && !i.entry.superTroop && !i.entry.seasonal) ||
         (i.category === "spells" && !i.entry.seasonal),
     )
-    .map((i) => buildChain(i, v.gates, "research"));
+    .map((i) => buildChain(i, "research"));
 }
 
 export function petChains(v: Village): Chain[] {
-  return v.items.filter((i) => i.category === "pets").map((i) => buildChain(i, v.gates, "none"));
+  return v.items.filter((i) => i.category === "pets").map((i) => buildChain(i, "none"));
 }
 
 export interface PoolForecast {
@@ -172,6 +205,8 @@ function runPool(
   blackout?: Blackout,
   /** Ce que le joueur a confirmé en cochant : lancements à leur heure, potions bues ce jour-là. */
   pool?: { name: "builder" | "lab" | "pet"; facts: Facts },
+  /** Montées d'HDV, de labo… simulées par les ouvriers (pour le labo et les animaux). */
+  gateEvents?: GateEvent[],
 ): PoolForecast {
   const tHours = hoursBetween(v.timestamp, cfg.end);
   const confirmed = pool ? potionFacts(pool.facts, pool.name, v.timestamp) : undefined;
@@ -186,7 +221,7 @@ function runPool(
     confirmed,
   });
   const run = (starts: number[]) =>
-    simulate({ exportUnix: v.timestamp, jamEndH: tHours, slots, clock: new WorkClock(starts, extraHours), chains, pass: s.pass, policy, sleep: s.sleep, hammers, cfg, blackout, forced });
+    simulate({ exportUnix: v.timestamp, jamEndH: tHours, slots, clock: new WorkClock(starts, extraHours), chains, pass: s.pass, policy, sleep: s.sleep, hammers, cfg, blackout, forced, gates: v.gates, gateEvents });
   let sim = run(plan.starts);
   // Une potion n'agit que sur les chantiers actifs : on retire celles qui tombent à vide.
   // Celles que le joueur a déclaré avoir bues restent : c'est ce qui s'est passé.
@@ -234,6 +269,13 @@ export interface Forecast {
   labBest: PoolForecast;
   labWorst: PoolForecast;
   pets: PoolForecast;
+  /** Montées d'HDV, de labo… prévues : elles débloquent des niveaux. */
+  gateEvents: GateEvent[];
+  /**
+   * Plan choisi entre « débloquer d'abord » (HDV, labo, salle des héros avant les autres bâtiments) et
+   * l'ordre habituel, avec la complétion du jeu entier prévue à la fin du Jam pour chacun.
+   */
+  unlockChoice?: { unlockFirst: boolean; scoreFirst: number; scoreUsual: number };
 }
 
 /**
@@ -243,7 +285,7 @@ export interface Forecast {
  * - bâtiments : seuls les bâtiments sont relancés ; les héros en cours finissent ;
  * - hybride : un héros libre passe toujours en premier, les ouvriers restants vont aux bâtiments.
  */
-export function builderChains(v: Village, s: Settings): { heroes: Chain[]; buildings: Chain[]; other: Chain[] } {
+export function builderChains(v: Village, s: Settings, unlockFirst = false): { heroes: Chain[]; buildings: Chain[]; other: Chain[] } {
   if (s.focus === "custom") {
     return { heroes: ordered(v, s, "builder", heroChains(v)), buildings: ordered(v, s, "builder", buildingChains(v)), other: guardianChains(v) };
   }
@@ -252,6 +294,8 @@ export function builderChains(v: Village, s: Settings): { heroes: Chain[]; build
   if (s.focus === "heroes") buildings = buildings.filter((c) => c.inProgress).map(keepInProgressOnly);
   if (s.focus === "buildings") heroes = heroes.filter((c) => c.inProgress).map(keepInProgressOnly);
   if (!s.countBuildingTimers && s.focus === "heroes") buildings = [];
+  // Variante « débloquer d'abord » : HDV, labo, salle des héros… passent devant les autres bâtiments.
+  if (unlockFirst) buildings = buildings.map((c) => (c.unlocks ? { ...c, priority: 0.5 } : c));
   return { heroes, buildings, other: guardianChains(v) };
 }
 
@@ -296,11 +340,11 @@ function applyOrder(chains: Chain[], order: string[], off: ReadonlySet<string>):
 const ordered = (v: Village, s: Settings, pool: OrderPool, chains: Chain[]) =>
   s.focus === "custom" ? applyOrder(chains, customOrder(v, s, pool), new Set(s.order.off)) : chains;
 
-export type BuilderForecast = Pick<Forecast, "heroes" | "buildings" | "builderSlots" | "busyAtExport" | "cwl">;
+export type BuilderForecast = Pick<Forecast, "heroes" | "buildings" | "builderSlots" | "busyAtExport" | "cwl" | "gateEvents">;
 
 /** Pool des ouvriers seul : sert aux recherches rapides (recommandation d'achats). */
-export function builderForecast(v: Village, s: Settings, cfg: JamConfig = JAM, facts: Facts = NO_FACTS): BuilderForecast {
-  const { heroes, buildings, other } = builderChains(v, s);
+export function builderForecast(v: Village, s: Settings, cfg: JamConfig = JAM, facts: Facts = NO_FACTS, unlockFirst = false): BuilderForecast {
+  const { heroes, buildings, other } = builderChains(v, s, unlockFirst);
   const builderSlots = s.builders + (s.goblinBuilder ? 1 : 0);
   const tHours = hoursBetween(v.timestamp, cfg.end);
   const cwl = cwlBlackout(s.cwl, v.timestamp, heroes) ?? null;
@@ -321,25 +365,58 @@ export function builderForecast(v: Village, s: Settings, cfg: JamConfig = JAM, f
     builderSlots,
     cwl,
     busyAtExport: [...heroes, ...buildings, ...other].filter((c) => c.inProgress).length,
+    // Montées d'HDV, de labo, d'animalerie… : elles débloquent des niveaux au labo et aux animaux.
+    gateEvents: pool.results
+      .filter((r) => r.chain.unlocks)
+      .flatMap((r) => r.segments.map((seg) => ({ t: seg.end, key: r.chain.unlocks!, level: seg.toLevel }))),
   };
 }
 
 /** Labo, ordre « plus courtes d'abord » (le plus de niveaux) ou « plus longues d'abord ». */
-export function labForecast(v: Village, s: Settings, policy: Policy = "shortest", cfg: JamConfig = JAM, facts: Facts = NO_FACTS): PoolForecast {
+export function labForecast(
+  v: Village,
+  s: Settings,
+  policy: Policy = "shortest",
+  cfg: JamConfig = JAM,
+  facts: Facts = NO_FACTS,
+  gateEvents: GateEvent[] = [],
+): PoolForecast {
   const labSlots = 1 + (s.goblinResearcher ? 1 : 0);
-  return runPool(v, s, ordered(v, s, "lab", labChains(v)), labSlots, s.potions.research, cfg.potions.research.extraHours, policy, [], cfg, undefined, { name: "lab", facts });
+  return runPool(v, s, ordered(v, s, "lab", labChains(v)), labSlots, s.potions.research, cfg.potions.research.extraHours, policy, [], cfg, undefined, { name: "lab", facts }, gateEvents);
 }
 
 const NO_FACTS: Facts = {};
 
-/** Plan complet. `facts` : ce que le joueur a confirmé en cochant (heures réelles, potions bues). */
-export function forecast(v: Village, s: Settings, cfg: JamConfig = JAM, facts: Facts = NO_FACTS): Forecast {
+function fullForecast(v: Village, s: Settings, cfg: JamConfig, facts: Facts, unlockFirst: boolean): Forecast {
+  const b = builderForecast(v, s, cfg, facts, unlockFirst);
   return {
-    ...builderForecast(v, s, cfg, facts),
-    labBest: labForecast(v, s, "shortest", cfg, facts),
-    labWorst: labForecast(v, s, "longest", cfg, facts),
-    pets: runPool(v, s, ordered(v, s, "pet", petChains(v)), 1, s.potions.pet, cfg.potions.pet.extraHours, "shortest", [], cfg, undefined, { name: "pet", facts }),
+    ...b,
+    labBest: labForecast(v, s, "shortest", cfg, facts, b.gateEvents),
+    labWorst: labForecast(v, s, "longest", cfg, facts, b.gateEvents),
+    pets: runPool(v, s, ordered(v, s, "pet", petChains(v)), 1, s.potions.pet, cfg.potions.pet.extraHours, "shortest", [], cfg, undefined, { name: "pet", facts }, b.gateEvents),
   };
+}
+
+/** Complétion du jeu entier prévue à la fin du Jam : sert à départager deux plans. */
+export function gameScoreAtEnd(v: Village, f: Forecast): number {
+  return globalPct(progressAt(progress(v, "game"), f, f.heroes.tHours));
+}
+
+/**
+ * Plan complet. `facts` : ce que le joueur a confirmé en cochant (heures réelles, potions bues).
+ * En Hybride et Bâtiments, quand l'HDV, le labo ou la salle des héros peuvent encore monter, deux plans
+ * sont calculés : « débloquer d'abord » (ces bâtiments avant les autres) et l'ordre habituel ; on garde
+ * celui qui donne la meilleure complétion du jeu entier à la fin du Jam.
+ */
+export function forecast(v: Village, s: Settings, cfg: JamConfig = JAM, facts: Facts = NO_FACTS): Forecast {
+  const base = fullForecast(v, s, cfg, facts, false);
+  const canUnlock = (s.focus === "hybrid" || s.focus === "buildings") && base.buildings.results.some((r) => r.chain.unlocks && r.chain.steps.length);
+  if (!canUnlock) return base;
+  const first = fullForecast(v, s, cfg, facts, true);
+  const scoreFirst = gameScoreAtEnd(v, first);
+  const scoreUsual = gameScoreAtEnd(v, base);
+  const chosen = scoreFirst > scoreUsual + 1e-9 ? first : base;
+  return { ...chosen, unlockChoice: { unlockFirst: chosen === first, scoreFirst, scoreUsual } };
 }
 
 export const heroLabel = (c: Chain) => HERO_SHORT[c.entry.name] ?? c.entry.nameFr ?? c.entry.name;

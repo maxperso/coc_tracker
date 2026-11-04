@@ -1,4 +1,4 @@
-import { displayName } from "../lib/gamedata";
+import { displayName, maxLevel } from "../lib/gamedata";
 import { customOrder, heroLabel, poolChains, typeKey, type Forecast, type OrderPool, type Settings, type UpgradeOrder } from "../lib/plan";
 import { levelLaunched, type Chain, type ChainResult } from "../lib/sim";
 import type { Village } from "../lib/village";
@@ -39,12 +39,15 @@ function items(v: Village, s: Settings, f: Forecast, pool: OrderPool): Item[] {
 }
 
 /** « ×7 · niv. 18-19 / 21 » ou « niv. 103 / 110 ». */
-function levels(chains: Chain[]): string {
-  const lvls = chains.map((c) => c.startLevel);
-  const lo = Math.min(...lvls);
-  const hi = Math.max(...lvls);
-  const cap = Math.max(...chains.map((c) => c.steps.at(-1)?.toLevel ?? c.startLevel));
-  return `${chains.length > 1 ? `×${chains.length} · ` : ""}niv. ${lo === hi ? lo : `${lo}-${hi}`} / ${cap}`;
+/** « ×7 · niv. 18-19 / 21 · 2 à construire » : exemplaires construits, max de l'HDV actuel. */
+function levels(chains: Chain[], v: Village): string {
+  const built = chains.filter((c) => c.unlockTh == null);
+  const toBuild = chains.length - built.length;
+  const c0 = chains[0];
+  const cap = maxLevel(c0.entry, c0.category === "buildings" || c0.category === "traps" ? { th: v.th } : v.gates);
+  const lvls = built.map((c) => c.startLevel);
+  const range = lvls.length ? `niv. ${Math.min(...lvls) === Math.max(...lvls) ? lvls[0] : `${Math.min(...lvls)}-${Math.max(...lvls)}`} / ${cap}` : "pas encore construit";
+  return `${built.length > 1 ? `×${built.length} · ` : ""}${range}${toBuild && built.length ? ` · ${toBuild} à construire` : ""}`;
 }
 
 /**
@@ -208,7 +211,7 @@ export function orderEditor(p: OrderViewProps): HTMLElement {
         "div",
         { class: "order-main" },
         h("p", { class: "order-name" }, it.label),
-        h("p", { class: "hint" }, levels(it.chains)),
+        h("p", { class: "hint" }, levels(it.chains, p.village)),
       ),
       h("span", { class: it.planned ? "pill" : "pill pill-muted" }, paused ? "pause" : it.planned ? `+${it.planned}` : "0"),
       ro ? null : h("span", { class: "order-arrows" }, arrow(-1), arrow(1)),

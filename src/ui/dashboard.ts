@@ -120,6 +120,9 @@ export interface DashboardProps {
 
 const readOnly = (p: DashboardProps) => p.owner.toLowerCase() !== p.me.toLowerCase();
 
+/** « Lance Roi 105 → 106 », ou « Construis Tour multi-armes » pour un bâtiment pas encore là. */
+const launchText = (name: string, toLevel: number) => (toLevel === 1 ? `Construis ${name}` : `Lance ${name} ${toLevel - 1} → ${toLevel}`);
+
 /** « Achète-en 2 juste avant (5 en stock) » : le stock supposé reste visible, pour le corriger s'il est faux. */
 const stockLine = (buy: number, stock: number) =>
   buy ? `Achète-en ${buy} juste avant (${stock} en stock)` : `Avec ton stock (${stock} en stock)`;
@@ -353,7 +356,7 @@ function todos(f: Forecast, v: Village): Todo[] {
       for (const { r, s } of builderStarts) {
         out.push({
           icon: sprite(r.chain.category, r.chain.entry, r.chain.category === "heroes" ? undefined : r.chain.startLevel, "sm"),
-          text: `Lance ${r.chain.category === "heroes" ? heroLabel(r.chain) : displayName(r.chain.entry)} ${s.toLevel - 1} → ${s.toLevel}`,
+          text: launchText(r.chain.category === "heroes" ? heroLabel(r.chain) : displayName(r.chain.entry), s.toLevel),
           sub: "Ouvrier libre",
           urgent: true,
           key: `L:${r.chain.key}:${s.toLevel}`,
@@ -372,7 +375,7 @@ function todos(f: Forecast, v: Village): Todo[] {
     if (first) {
       out.push({
         icon: sprite(first.r.chain.category, first.r.chain.entry, undefined, "sm"),
-        text: `Lance ${displayName(first.r.chain.entry)} ${first.s.toLevel - 1} → ${first.s.toLevel}`,
+        text: launchText(displayName(first.r.chain.entry), first.s.toLevel),
         sub: `${label} vide`,
         urgent: true,
         key: `L:${first.r.chain.key}:${first.s.toLevel}`,
@@ -865,7 +868,7 @@ function eventRow(p: DashboardProps, e: PlanEvent, exportUnix: number, T: number
     h(
       "button",
       { type: "button", class: "ev-main ev-open", onClick: () => openInfo(p, r, e.seg.toLevel), title: "Voir les niveaux à venir" },
-      h("span", { class: "ev-text" }, `Lance ${nameOf(r)} ${e.seg.toLevel - 1} → ${e.seg.toLevel}`, launchCost(r, e.seg)),
+      h("span", { class: "ev-text" }, launchText(nameOf(r), e.seg.toLevel), launchCost(r, e.seg)),
       h("span", { class: "hint" }, `${POOL_LABEL[e.pool]} · fini le ${fmtDateTime(toDate(exportUnix, e.seg.end))}${e.seg.end > T ? " (après le Jam)" : ""}`),
     ),
     doneBox(p, key, `${nameOf(r)} ${e.seg.toLevel - 1} → ${e.seg.toLevel}`, () => li, onToggle, {
@@ -979,11 +982,50 @@ function orderTab(p: DashboardProps, f: Forecast): HTMLElement {
   );
 }
 
+/**
+ * HDV pas au max du jeu : quand le plan le monte, ce que ça débloque, et pourquoi cet ordre
+ * (le plan compare « débloquer d'abord » à l'ordre habituel sur la complétion du jeu à la fin du Jam).
+ */
+function townHallCard(p: DashboardProps, f: Forecast): HTMLElement | null {
+  const v = p.village;
+  const th = f.buildings.results.find((r) => r.chain.entry.name === "Town Hall");
+  if (!th || v.th >= gameIndex().data.maxTh) return null;
+  const ups = th.segments.filter((s) => !s.inProgressAtExport);
+  const running = th.segments.find((s) => s.inProgressAtExport);
+  const builds = f.buildings.results.filter((r) => r.chain.startLevel === 0 && r.segments.length).length;
+  const c = f.unlockChoice;
+  const pct = (x: number) => `${nf(x * 100, 1)} %`;
+  return h(
+    "section",
+    { class: "card" },
+    h("div", { class: "card-head" }, h("h2", { class: "card-title" }, `Ton HDV ${v.th}`), h("span", { class: "muted" }, `max du jeu : HDV ${gameIndex().data.maxTh}`)),
+    h(
+      "ul",
+      { class: "rules-list" },
+      running ? h("li", null, `HDV ${running.toLevel} en cours, fini le ${fmtDateTime(toDate(v.timestamp, running.end))}.`) : null,
+      ups.length
+        ? ups.map((s) => h("li", null, h("strong", null, `HDV ${s.toLevel - 1} → ${s.toLevel}`), ` lancé le ${fmtDateTime(toDate(v.timestamp, s.start))}, fini le ${fmtDateTime(toDate(v.timestamp, s.end))}. Les niveaux et bâtiments qu'il débloque entrent dans le plan dès la fin.`))
+        : h("li", null, "Pas de montée d'HDV pendant le Jam avec ce plan : il reste plus utile de monter ce que ton HDV permet déjà."),
+      builds ? h("li", null, `${builds} bâtiment${builds > 1 ? "s" : ""} à construire (ceux qui te manquent, puis ceux du nouvel HDV).`) : null,
+      c
+        ? h(
+            "li",
+            null,
+            c.unlockFirst
+              ? `Choix : HDV, labo et salle des héros d'abord. Jeu complet prévu à la fin du Jam : ${pct(c.scoreFirst)}, contre ${pct(c.scoreUsual)} dans l'ordre habituel.`
+              : `Choix : l'ordre habituel. Jeu complet prévu à la fin du Jam : ${pct(c.scoreUsual)}, contre ${pct(c.scoreFirst)} en montant d'abord HDV, labo et salle des héros.`,
+          )
+        : null,
+    ),
+  );
+}
+
 function planTab(p: DashboardProps, f: Forecast): HTMLElement {
   return h(
     "section",
     { class: "stack" },
     sectionHead(readOnly(p) ? `Plan de ${p.owner}, jour par jour` : "Ton plan jour par jour", "Heure de Paris. Reviens à ces heures pour relancer.", estimate()),
+    townHallCard(p, f),
     p.settings.focus === "custom"
       ? h(
           "div",
